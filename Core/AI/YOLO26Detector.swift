@@ -9,9 +9,9 @@ public class YOLO26Detector {
     private var visionModel: VNCoreMLModel?
     private var rawMLModel: MLModel?
     
-    // 4-wheelers only: Car, Truck, Bus (ignoring pedestrians, bicycles, motorcycles)
+    // 4-wheelers only: Car, Truck, Bus
     private let targetLabels: Set<String> = ["car", "truck", "bus"]
-    private let confidenceThreshold: Float = 0.40
+    private let confidenceThreshold: Float = 0.42
     
     public init() {
         setupModel()
@@ -72,8 +72,8 @@ public class YOLO26Detector {
                     if self.targetLabels.contains(label) && topLabel.confidence >= self.confidenceThreshold {
                         let bottomY = 1.0 - obs.boundingBox.origin.y
                         
-                        // Ignore car bonnet/hood zone (bottom 15% of camera view)
-                        guard bottomY <= 0.85 else { continue }
+                        // Mask out hood/mirror zone (bottom 20% of view)
+                        guard bottomY <= 0.80 else { continue }
                         
                         let box = CGRect(
                             x: obs.boundingBox.origin.x,
@@ -89,7 +89,7 @@ public class YOLO26Detector {
                 detections = self.parseYOLORawTensor(multiArray: multiArray)
             }
             
-            // Sort by lowest contact point in image (closest first)
+            // Sort closest first
             detections.sort { $0.bottomY > $1.bottomY }
             completion(detections)
         }
@@ -98,8 +98,6 @@ public class YOLO26Detector {
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
         try? handler.perform([request])
     }
-    
-    // MARK: - Raw YOLO Tensor Parser
     
     private func parseYOLORawTensor(multiArray: MLMultiArray) -> [Detection] {
         let shape = multiArray.shape.map { $0.intValue }
@@ -156,9 +154,7 @@ public class YOLO26Detector {
             let y2 = min(1.0, cy + (h / 2.0))
             
             guard x2 > x1 && y2 > y1 else { continue }
-            
-            // Exclude anything in the bottom 15% (car hood/wipers)
-            guard y2 <= 0.85 else { continue }
+            guard y2 <= 0.80 else { continue } // Hood exclusion
             
             candidates.append(Candidate(
                 label: bestLabel,
@@ -168,7 +164,6 @@ public class YOLO26Detector {
             ))
         }
         
-        // Greedy NMS
         candidates.sort { $0.score > $1.score }
         var kept: [Candidate] = []
         

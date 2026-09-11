@@ -8,6 +8,7 @@ public struct LeadVehicleState {
     public let absoluteSpeedKmh: Double
     public let timeToCollision: Double?
     public let headwaySeconds: Double?
+    public let isStationary: Bool
 }
 
 public struct Detection: Identifiable {
@@ -19,15 +20,12 @@ public struct Detection: Identifiable {
 }
 
 public struct GroundPlaneProjector {
-    // Optical & Windshield Mounting Parameters
     public static let cameraHeightM: Double = 1.30
     public static let focalLengthPx: Double = 1450.0
-    
-    // Vanishing point of road in video stream (middle of frame)
     public static let horizonYPx: Double = 530.0
     
     public static let minDistance: Double = 3.0
-    public static let maxDistance: Double = 120.0
+    public static let maxDistance: Double = 85.0 // Reliable on-device vision ceiling
     
     public static func estimateDistance(
         bottomY: Double,
@@ -36,8 +34,8 @@ public struct GroundPlaneProjector {
         let yBottomPixel = bottomY * frameHeight
         let deltaY = yBottomPixel - horizonYPx
         
-        // Guard: At or above the horizon line -> infinite/max distance
-        guard deltaY > 3.0 else {
+        // Guard: Objects within 8px of horizon are at the visual horizon limit
+        guard deltaY > 8.0 else {
             return maxDistance
         }
         
