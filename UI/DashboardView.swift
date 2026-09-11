@@ -41,6 +41,7 @@ public final class ADASViewModel: ObservableObject {
     
     private let detector = YOLO26Detector()
     private let kalmanFilter = LeadKalmanFilter()
+    private let vpTracker = VanishingPointTracker()
     
     private let processingQueue = DispatchQueue(label: "com.visionadas.pipeline", qos: .userInteractive)
     
@@ -62,14 +63,21 @@ public final class ADASViewModel: ObservableObject {
             }
         }
     }
-    
+
     private func processFrame(pixelBuffer: CVPixelBuffer, presentationTimestamp: CMTime) {
         let timestampSec = CMTimeGetSeconds(presentationTimestamp)
         let hostSpeed = self.gpsManager.currentSpeedKmh
+        let pitchRad = self.motionManager.pitchRadians
         
         self.detector.detect(pixelBuffer: pixelBuffer) { [weak self] detectedVehicles in
             guard let self = self else { return }
             
+            self.vpTracker.update(
+            currentPitchRad: pitchRad,
+            distantDetections: detectedVehicles,
+            hostSpeedKmh: hostSpeed
+            )
+
             var updatedLeadState: LeadVehicleState? = nil
             var confirmedLeadId: UUID? = nil
             
@@ -80,19 +88,19 @@ public final class ADASViewModel: ObservableObject {
             
             // 2. Select closest vehicle directly in our driving lane
             if let candidate = inLaneVehicles.first {
-                let projectedDistance = GroundPlaneProjector.estimateFusedDistance(
-                    boxHeightNormalized: Double(candidate.boundingBox.height),
-                    bottomYNormalized: Double(candidate.bottomY),
+                let anchoredDistance = GroundPlaneProjector.estimateAnchoredDistance(
+                    boxHeightNorm: Double(candidate.boundingBox.height),
+                    bottomYNorm: Double(candidate.bottomY),
+                    vpY: self.vpTracker.vpY,
                     label: candidate.label
                 )
-                
-                // Track jump guard
-                if abs(projectedDistance - self.kalmanFilter.currentDistance) > 14.0 {
+            
+                if abs(anchoredDistance - self.kalmanFilter.currentDistance) > 14.0 {
                     self.kalmanFilter.reset()
                 }
-                
+            
                 let state = self.kalmanFilter.update(
-                    measuredDistance: projectedDistance,
+                    measuredDistance: anchoredDistance,
                     hostSpeedKmh: hostSpeed,
                     timestamp: timestampSec
                 )
