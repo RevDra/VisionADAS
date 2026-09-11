@@ -205,6 +205,13 @@ public final class LeadKalmanFilter {
         )
     }
     
+    // MARK: - Public State Accessors
+    
+    /// Current estimated longitudinal distance to lead vehicle in meters.
+    public var currentDistance: Double {
+        return state[0]
+    }
+
     // MARK: - Test Helpers
     
     internal func testState() -> [Double] { return state }

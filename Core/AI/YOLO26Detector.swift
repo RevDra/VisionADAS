@@ -9,7 +9,8 @@ public class YOLO26Detector {
     private var visionModel: VNCoreMLModel?
     private var rawMLModel: MLModel?
     
-    private let targetLabels: Set<String> = ["car", "truck", "bus", "motorcycle", "bicycle"]
+    // 4-wheelers only: Car, Truck, Bus (ignoring pedestrians, bicycles, motorcycles)
+    private let targetLabels: Set<String> = ["car", "truck", "bus"]
     private let confidenceThreshold: Float = 0.40
     
     public init() {
@@ -18,7 +19,7 @@ public class YOLO26Detector {
     
     private func setupModel() {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .all // Target Apple Neural Engine
+        configuration.computeUnits = .all
         
         var coreMLModel: MLModel?
         let possibleNames = ["yolo26", "yolo26n", "model"]
@@ -64,31 +65,31 @@ public class YOLO26Detector {
             
             var detections: [Detection] = []
             
-            // Branch A: Vision-wrapped NMS Observation
             if let observations = req.results as? [VNRecognizedObjectObservation] {
                 for obs in observations {
                     guard let topLabel = obs.labels.first else { continue }
                     let label = topLabel.identifier.lowercased()
                     if self.targetLabels.contains(label) && topLabel.confidence >= self.confidenceThreshold {
-                        // Vision normalized origin is bottom-left (0..1)
+                        let bottomY = 1.0 - obs.boundingBox.origin.y
+                        
+                        // Ignore car bonnet/hood zone (bottom 15% of camera view)
+                        guard bottomY <= 0.85 else { continue }
+                        
                         let box = CGRect(
                             x: obs.boundingBox.origin.x,
                             y: 1.0 - obs.boundingBox.origin.y - obs.boundingBox.height,
                             width: obs.boundingBox.width,
                             height: obs.boundingBox.height
                         )
-                        let bottomY = 1.0 - obs.boundingBox.origin.y
                         detections.append(Detection(label: label, confidence: topLabel.confidence, boundingBox: box, bottomY: bottomY))
                     }
                 }
-            }
-            // Branch B: Raw [1, 84, 8400] YOLO Output
-            else if let featureObservations = req.results as? [VNCoreMLFeatureValueObservation],
-                    let multiArray = featureObservations.first?.featureValue.multiArrayValue {
+            } else if let featureObservations = req.results as? [VNCoreMLFeatureValueObservation],
+                      let multiArray = featureObservations.first?.featureValue.multiArrayValue {
                 detections = self.parseYOLORawTensor(multiArray: multiArray)
             }
             
-            // Sort closest vehicle first
+            // Sort by lowest contact point in image (closest first)
             detections.sort { $0.bottomY > $1.bottomY }
             completion(detections)
         }
@@ -98,24 +99,21 @@ public class YOLO26Detector {
         try? handler.perform([request])
     }
     
-    // MARK: - Correct Raw YOLO [1, 84, 8400] Parser
+    // MARK: - Raw YOLO Tensor Parser
     
     private func parseYOLORawTensor(multiArray: MLMultiArray) -> [Detection] {
         let shape = multiArray.shape.map { $0.intValue }
         guard shape.count >= 2 else { return [] }
         
-        // Tensor shape is typically [1, 84, 8400]
-        let numChannels = shape[shape.count - 2] // 84
-        let numAnchors  = shape[shape.count - 1] // 8400
+        let numChannels = shape[shape.count - 2]
+        let numAnchors  = shape[shape.count - 1]
         guard numChannels >= 6 else { return [] }
         
         let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: multiArray.count)
         
-        // COCO indices: 1: bicycle, 2: car, 3: motorcycle, 5: bus, 7: truck
+        // 4-wheelers COCO indices: 2: car, 5: bus, 7: truck
         let vehicleClassChannels: [(channel: Int, label: String)] = [
-            (4 + 1, "bicycle"),
             (4 + 2, "car"),
-            (4 + 3, "motorcycle"),
             (4 + 5, "bus"),
             (4 + 7, "truck")
         ]
@@ -128,7 +126,6 @@ public class YOLO26Detector {
         }
         var candidates: [Candidate] = []
         
-        // Pointer heads for cx, cy, w, h
         let cxHead = ptr
         let cyHead = ptr.advanced(by: 1 * numAnchors)
         let wHead  = ptr.advanced(by: 2 * numAnchors)
@@ -148,7 +145,6 @@ public class YOLO26Detector {
             
             guard bestScore >= confidenceThreshold else { continue }
             
-            // Normalize from 640px model space to [0.0 ... 1.0]
             let cx = CGFloat(cxHead[a]) / 640.0
             let cy = CGFloat(cyHead[a]) / 640.0
             let w  = CGFloat(wHead[a])  / 640.0
@@ -159,8 +155,10 @@ public class YOLO26Detector {
             let x2 = min(1.0, cx + (w / 2.0))
             let y2 = min(1.0, cy + (h / 2.0))
             
-            // Guard against edge artifacts
             guard x2 > x1 && y2 > y1 else { continue }
+            
+            // Exclude anything in the bottom 15% (car hood/wipers)
+            guard y2 <= 0.85 else { continue }
             
             candidates.append(Candidate(
                 label: bestLabel,
@@ -170,7 +168,7 @@ public class YOLO26Detector {
             ))
         }
         
-        // Quick Greedy NMS
+        // Greedy NMS
         candidates.sort { $0.score > $1.score }
         var kept: [Candidate] = []
         
@@ -184,7 +182,7 @@ public class YOLO26Detector {
             }
             if !overlap {
                 kept.append(cand)
-                if kept.count >= 10 { break } // Max 10 road targets
+                if kept.count >= 8 { break }
             }
         }
         

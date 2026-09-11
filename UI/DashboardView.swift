@@ -99,40 +99,49 @@ public final class ADASViewModel: ObservableObject {
     /// Executes the detection -> projection -> filtering cycle on the processing queue.
     private func processFrame(pixelBuffer: CVPixelBuffer, presentationTimestamp: CMTime) {
         let timestampSec = CMTimeGetSeconds(presentationTimestamp)
-        
-        // 1. Thread-safe snapshot of sensor telemetry
         let hostSpeed = self.gpsManager.currentSpeedKmh
-        let pitchRad = self.motionManager.pitchRadians
         
-        // 2. Run YOLO26 inference (ANE accelerated)
         self.detector.detect(pixelBuffer: pixelBuffer) { [weak self] detectedVehicles in
             guard let self = self else { return }
             
             var updatedLeadState: LeadVehicleState? = nil
             
-            // 3. Kinematics: Ground-Plane Ray Casting & Kalman Tracking
-            if let leadDetection = detectedVehicles.first {
-                // Monocular tire-to-road contact point distance projection
+            // 1. Filter detections to our host driving lane (Central 36% of view)
+            let inLaneVehicles = detectedVehicles.filter { det in
+                let centerX = det.boundingBox.midX
+                return centerX >= 0.32 && centerX <= 0.68
+            }
+            
+            // 2. Select closest vehicle directly in our lane
+            if let leadDetection = inLaneVehicles.first {
                 let projectedDistance = GroundPlaneProjector.estimateDistance(
-                    bottomY: Double(leadDetection.bottomY),
-                    pitchRad: pitchRad
+                    bottomY: Double(leadDetection.bottomY)
                 )
                 
-                // 3-state discrete Kalman filter update
-                updatedLeadState = self.kalmanFilter.update(
+                // Reset tracker if target jumped suddenly (switched vehicle)
+                if abs(projectedDistance - self.kalmanFilter.currentDistance) > 12.0 {
+                    self.kalmanFilter.reset()
+                }
+                
+                let candidateState = self.kalmanFilter.update(
                     measuredDistance: projectedDistance,
                     hostSpeedKmh: hostSpeed,
                     timestamp: timestampSec
                 )
+                
+                // For highway ADAS: If lead car is confirmed stationary while driving on road, ignore as lead target
+                if hostSpeed > 20.0 && candidateState.absoluteSpeedKmh <= 6.0 {
+                    updatedLeadState = nil
+                } else {
+                    updatedLeadState = candidateState
+                }
             } else {
-                // Coast previous track through momentary occlusion (e.g. wiper sweep)
                 updatedLeadState = self.kalmanFilter.coast(
                     timestamp: timestampSec,
                     hostSpeedKmh: hostSpeed
                 )
             }
             
-            // 4. Dispatch updated state to MainActor for SwiftUI
             DispatchQueue.main.async {
                 self.detections = detectedVehicles
                 self.leadState = updatedLeadState
@@ -140,7 +149,6 @@ public final class ADASViewModel: ObservableObject {
                 self.droppedFrameCount = self.cameraManager.droppedFrames
             }
             
-            // 5. Release frame buffer back to AVFoundation ISP pool
             self.cameraManager.finishProcessing()
         }
     }
