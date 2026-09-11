@@ -9,68 +9,46 @@ public class YOLO26Detector {
     private var visionModel: VNCoreMLModel?
     private var rawMLModel: MLModel?
     
-    // COCO Target classes: car, motorcycle/scooter, bus, truck, bicycle
     private let targetLabels: Set<String> = ["car", "truck", "bus", "motorcycle", "bicycle"]
-    private let confidenceThreshold: Float = 0.35
+    private let confidenceThreshold: Float = 0.40
     
     public init() {
         setupModel()
     }
     
-    // MARK: - Model Initialization
-    
     private func setupModel() {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .all // Force Apple Neural Engine (ANE)
+        configuration.computeUnits = .all // Target Apple Neural Engine
         
         var coreMLModel: MLModel?
+        let possibleNames = ["yolo26", "yolo26n", "model"]
         
-        // 1. In compiled iOS apps, Xcode compiles .mlpackage into .mlmodelc
-        let possibleNames = ["yolo26", "yolo26n", "model", "VisionADAS"]
         for name in possibleNames {
             if let compiledURL = Bundle.main.url(forResource: name, withExtension: "mlmodelc") {
-                do {
-                    coreMLModel = try MLModel(contentsOf: compiledURL, configuration: configuration)
-                    print("[YOLO26Detector] Successfully loaded compiled model: \(name).mlmodelc")
-                    break
-                } catch {
-                    print("[YOLO26Detector] Error loading \(name).mlmodelc: \(error)")
-                }
+                coreMLModel = try? MLModel(contentsOf: compiledURL, configuration: configuration)
+                if coreMLModel != nil { break }
             }
         }
         
-        // 2. Fallback: on-device compile if raw .mlpackage is present
         if coreMLModel == nil {
             for name in possibleNames {
                 if let packageURL = Bundle.main.url(forResource: name, withExtension: "mlpackage") {
-                    do {
-                        let compiledURL = try MLModel.compileModel(at: packageURL)
-                        coreMLModel = try MLModel(contentsOf: compiledURL, configuration: configuration)
-                        print("[YOLO26Detector] Compiled and loaded on-device: \(name).mlpackage")
-                        break
-                    } catch {
-                        print("[YOLO26Detector] Error compiling \(name).mlpackage: \(error)")
+                    if let compiledURL = try? MLModel.compileModel(at: packageURL) {
+                        coreMLModel = try? MLModel(contentsOf: compiledURL, configuration: configuration)
+                        if coreMLModel != nil { break }
                     }
                 }
             }
         }
         
         guard let model = coreMLModel else {
-            print("[YOLO26Detector] FATAL: Neither yolo26.mlmodelc nor yolo26n.mlmodelc found in bundle!")
+            print("[YOLO26Detector] Error: Model not found in bundle.")
             return
         }
         
         self.rawMLModel = model
-        
-        do {
-            self.visionModel = try VNCoreMLModel(for: model)
-            print("[YOLO26Detector] VNCoreMLModel initialized on ANE.")
-        } catch {
-            print("[YOLO26Detector] Error creating VNCoreMLModel: \(error)")
-        }
+        self.visionModel = try? VNCoreMLModel(for: model)
     }
-    
-    // MARK: - Detection Pipeline
     
     public func detect(pixelBuffer: CVPixelBuffer, completion: @escaping ([Detection]) -> Void) {
         guard let visionModel = visionModel else {
@@ -86,131 +64,140 @@ public class YOLO26Detector {
             
             var detections: [Detection] = []
             
-            // Branch A: Standard Vision Recognized Objects
+            // Branch A: Vision-wrapped NMS Observation
             if let observations = req.results as? [VNRecognizedObjectObservation] {
                 for obs in observations {
                     guard let topLabel = obs.labels.first else { continue }
                     let label = topLabel.identifier.lowercased()
-                    let confidence = topLabel.confidence
-                    
-                    if self.targetLabels.contains(label) && confidence >= self.confidenceThreshold {
-                        let boundingBox = ROICropUtility.fullPipeline(visionRect: obs.boundingBox)
-                        let bottomY = ROICropUtility.bottomYInFullFrame(visionRect: obs.boundingBox)
-                        
-                        detections.append(Detection(
-                            label: label,
-                            confidence: confidence,
-                            boundingBox: boundingBox,
-                            bottomY: bottomY
-                        ))
+                    if self.targetLabels.contains(label) && topLabel.confidence >= self.confidenceThreshold {
+                        // Vision normalized origin is bottom-left (0..1)
+                        let box = CGRect(
+                            x: obs.boundingBox.origin.x,
+                            y: 1.0 - obs.boundingBox.origin.y - obs.boundingBox.height,
+                            width: obs.boundingBox.width,
+                            height: obs.boundingBox.height
+                        )
+                        let bottomY = 1.0 - obs.boundingBox.origin.y
+                        detections.append(Detection(label: label, confidence: topLabel.confidence, boundingBox: box, bottomY: bottomY))
                     }
                 }
             }
-            // Branch B: Raw MultiArray Tensor Output (NMS-free / End-to-End head)
+            // Branch B: Raw [1, 84, 8400] YOLO Output
             else if let featureObservations = req.results as? [VNCoreMLFeatureValueObservation],
                     let multiArray = featureObservations.first?.featureValue.multiArrayValue {
-                detections = self.parseNMSFreeTensor(multiArray: multiArray)
+                detections = self.parseYOLORawTensor(multiArray: multiArray)
             }
             
-            // Sort closest first (largest bottomY)
+            // Sort closest vehicle first
             detections.sort { $0.bottomY > $1.bottomY }
             completion(detections)
         }
         
         request.imageCropAndScaleOption = .scaleFill
-        
-        // Feed full camera frame into YOLO so targets anywhere in view (like the indoor scooter) are detected
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-        
-        do {
-            try handler.perform([request])
-        } catch {
-            print("[YOLO26Detector] Handler perform failed: \(error)")
-            completion([])
-        }
+        try? handler.perform([request])
     }
     
-    // MARK: - Tensor Parser
+    // MARK: - Correct Raw YOLO [1, 84, 8400] Parser
     
-    private func parseNMSFreeTensor(multiArray: MLMultiArray) -> [Detection] {
-        var results: [Detection] = []
+    private func parseYOLORawTensor(multiArray: MLMultiArray) -> [Detection] {
         let shape = multiArray.shape.map { $0.intValue }
         guard shape.count >= 2 else { return [] }
         
-        let numDetections: Int
-        let numFeatures: Int
-        let isTransposed: Bool
-        
-        if shape.count == 3 {
-            if shape[1] <= 300 && shape[2] >= 6 {
-                numDetections = shape[1]
-                numFeatures = shape[2]
-                isTransposed = false
-            } else if shape[1] >= 6 && shape[2] <= 300 {
-                numFeatures = shape[1]
-                numDetections = shape[2]
-                isTransposed = true
-            } else {
-                numDetections = shape[1]
-                numFeatures = shape[2]
-                isTransposed = false
-            }
-        } else {
-            numDetections = shape[0]
-            numFeatures = shape[1]
-            isTransposed = false
-        }
-        
-        let cocoVehicleClasses: [Int: String] = [
-            1: "bicycle",
-            2: "car",
-            3: "motorcycle",
-            5: "bus",
-            7: "truck"
-        ]
+        // Tensor shape is typically [1, 84, 8400]
+        let numChannels = shape[shape.count - 2] // 84
+        let numAnchors  = shape[shape.count - 1] // 8400
+        guard numChannels >= 6 else { return [] }
         
         let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: multiArray.count)
         
-        for i in 0..<numDetections {
-            let conf: Float
-            let classId: Int
-            let x1, y1, x2, y2: CGFloat
+        // COCO indices: 1: bicycle, 2: car, 3: motorcycle, 5: bus, 7: truck
+        let vehicleClassChannels: [(channel: Int, label: String)] = [
+            (4 + 1, "bicycle"),
+            (4 + 2, "car"),
+            (4 + 3, "motorcycle"),
+            (4 + 5, "bus"),
+            (4 + 7, "truck")
+        ]
+        
+        struct Candidate {
+            let label: String
+            let score: Float
+            let box: CGRect
+            let bottomY: CGFloat
+        }
+        var candidates: [Candidate] = []
+        
+        // Pointer heads for cx, cy, w, h
+        let cxHead = ptr
+        let cyHead = ptr.advanced(by: 1 * numAnchors)
+        let wHead  = ptr.advanced(by: 2 * numAnchors)
+        let hHead  = ptr.advanced(by: 3 * numAnchors)
+        
+        for a in 0..<numAnchors {
+            var bestScore: Float = 0.0
+            var bestLabel = "car"
             
-            if !isTransposed {
-                let offset = i * numFeatures
-                conf = ptr[offset + 4]
-                guard conf >= confidenceThreshold else { continue }
-                classId = Int(ptr[offset + 5])
-                x1 = CGFloat(ptr[offset + 0])
-                y1 = CGFloat(ptr[offset + 1])
-                x2 = CGFloat(ptr[offset + 2])
-                y2 = CGFloat(ptr[offset + 3])
-            } else {
-                conf = ptr[4 * numDetections + i]
-                guard conf >= confidenceThreshold else { continue }
-                classId = Int(ptr[5 * numDetections + i])
-                x1 = CGFloat(ptr[0 * numDetections + i])
-                y1 = CGFloat(ptr[1 * numDetections + i])
-                x2 = CGFloat(ptr[2 * numDetections + i])
-                y2 = CGFloat(ptr[3 * numDetections + i])
+            for (ch, label) in vehicleClassChannels {
+                let score = ptr[ch * numAnchors + a]
+                if score > bestScore {
+                    bestScore = score
+                    bestLabel = label
+                }
             }
             
-            guard let label = cocoVehicleClasses[classId], targetLabels.contains(label) else { continue }
+            guard bestScore >= confidenceThreshold else { continue }
             
-            // Coordinates in [0, 1] normalized space
-            let w = max(0, x2 - x1)
-            let h = max(0, y2 - y1)
-            let box = CGRect(x: x1, y: y1, width: w, height: h)
-            let bottomY = y2
+            // Normalize from 640px model space to [0.0 ... 1.0]
+            let cx = CGFloat(cxHead[a]) / 640.0
+            let cy = CGFloat(cyHead[a]) / 640.0
+            let w  = CGFloat(wHead[a])  / 640.0
+            let h  = CGFloat(hHead[a])  / 640.0
             
-            results.append(Detection(
-                label: label,
-                confidence: conf,
-                boundingBox: box,
-                bottomY: bottomY
+            let x1 = max(0.0, cx - (w / 2.0))
+            let y1 = max(0.0, cy - (h / 2.0))
+            let x2 = min(1.0, cx + (w / 2.0))
+            let y2 = min(1.0, cy + (h / 2.0))
+            
+            // Guard against edge artifacts
+            guard x2 > x1 && y2 > y1 else { continue }
+            
+            candidates.append(Candidate(
+                label: bestLabel,
+                score: bestScore,
+                box: CGRect(x: x1, y: y1, width: x2 - x1, height: y2 - y1),
+                bottomY: y2
             ))
         }
         
-        return results
+        // Quick Greedy NMS
+        candidates.sort { $0.score > $1.score }
+        var kept: [Candidate] = []
+        
+        for cand in candidates {
+            var overlap = false
+            for k in kept {
+                if iou(cand.box, k.box) > 0.45 {
+                    overlap = true
+                    break
+                }
+            }
+            if !overlap {
+                kept.append(cand)
+                if kept.count >= 10 { break } // Max 10 road targets
+            }
+        }
+        
+        return kept.map {
+            Detection(label: $0.label, confidence: $0.score, boundingBox: $0.box, bottomY: $0.bottomY)
+        }
+    }
+    
+    private func iou(_ a: CGRect, _ b: CGRect) -> CGFloat {
+        let intersection = a.intersection(b)
+        guard !intersection.isNull else { return 0.0 }
+        let intersectionArea = intersection.width * intersection.height
+        let unionArea = (a.width * a.height) + (b.width * b.height) - intersectionArea
+        return unionArea > 0 ? (intersectionArea / unionArea) : 0.0
     }
 }

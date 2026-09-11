@@ -183,13 +183,16 @@ public struct ADASHUDView: View {
     
     // MARK: - Safety Criteria & Styling
     
-    /// Critical Danger condition: Time to Collision < 1.8s or distance < 6.0m
+    /// Critical Danger condition: Active only when host vehicle is moving
     private var isCriticalDanger: Bool {
-        guard let state = leadState else { return false }
+        guard let state = leadState, hostSpeedKmh > 10.0 else { return false }
+        
+        // Time To Collision critical (< 1.8s) while approaching
         if let ttc = state.timeToCollision, ttc < 1.8 {
             return true
         }
-        if state.distance < 6.0 {
+        // Clamping threshold only applies if host is moving fast (> 15 km/h)
+        if state.distance < 4.0 && hostSpeedKmh > 15.0 {
             return true
         }
         return false
