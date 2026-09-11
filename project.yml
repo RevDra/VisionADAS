@@ -20,3 +20,8 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         TARGETED_DEVICE_FAMILY: "1" # iPhone
         SUPPORTS_MACCATALYST: NO
+        # Lock target orientations to Landscape in Xcode build settings
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft"
+        INFOPLIST_KEY_UIInterfaceOrientation: "UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UIViewControllerBasedStatusBarAppearance: NO
+        INFOPLIST_KEY_UIStatusBarHidden: YES

@@ -18,8 +18,8 @@ public struct CameraPreviewView: UIViewRepresentable {
         // Ensure initial connection orientation aligns with Landscape
         if let connection = view.previewLayer.connection {
             if #available(iOS 17.0, *) {
-                if connection.isVideoRotationAngleSupported(90) {
-                    connection.videoRotationAngle = 90
+                if connection.isVideoRotationAngleSupported(0) {
+                    connection.videoRotationAngle = 0
                 }
             } else {
                 if connection.isVideoOrientationSupported {
@@ -35,6 +35,7 @@ public struct CameraPreviewView: UIViewRepresentable {
         if uiView.previewLayer.session !== session {
             uiView.previewLayer.session = session
         }
+        uiView.previewLayer.frame = uiView.bounds
     }
 }
 

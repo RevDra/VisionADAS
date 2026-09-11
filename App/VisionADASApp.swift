@@ -2,13 +2,11 @@ import SwiftUI
 
 @main
 struct VisionADASApp: App {
-    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
     var body: some Scene {
         WindowGroup {
             DashboardView()
-                .preferredColorScheme(.dark)
                 .statusBarHidden(true)
+                .persistentSystemOverlays(.hidden)
         }
     }
 }
