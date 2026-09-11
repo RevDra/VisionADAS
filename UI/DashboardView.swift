@@ -80,8 +80,10 @@ public final class ADASViewModel: ObservableObject {
             
             // 2. Select closest vehicle directly in our driving lane
             if let candidate = inLaneVehicles.first {
-                let projectedDistance = GroundPlaneProjector.estimateDistance(
-                    bottomY: Double(candidate.bottomY)
+                let projectedDistance = GroundPlaneProjector.estimateFusedDistance(
+                    boxHeightNormalized: Double(candidate.boundingBox.height),
+                    bottomYNormalized: Double(candidate.bottomY),
+                    label: candidate.label
                 )
                 
                 // Track jump guard
