@@ -1,0 +1,22 @@
+name: VisionADAS
+options:
+  bundleIdPrefix: com.visionadas
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  VisionADAS:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Core
+      - UI
+    settings:
+      base:
+        INFOPLIST_FILE: App/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.visionadas.dashcam
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        TARGETED_DEVICE_FAMILY: "1" # iPhone
+        SUPPORTS_MACCATALYST: NO

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSCameraUsageDescription</key>
+    <string>VisionADAS needs camera access to detect vehicles and estimate distances for driver assistance.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>VisionADAS uses your location to determine vehicle speed for headway and collision calculations.</string>
+    <key>NSMotionUsageDescription</key>
+    <string>VisionADAS uses motion sensors to compensate for vehicle pitch changes and improve distance accuracy.</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UIRequiresFullScreen</key>
+    <true/>
+    <key>UIStatusBarHidden</key>
+    <true/>
+</dict>
+</plist>
