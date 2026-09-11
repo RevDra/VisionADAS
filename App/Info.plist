@@ -2,20 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>NSCameraUsageDescription</key>
-    <string>VisionADAS needs camera access to detect vehicles and estimate distances for driver assistance.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>VisionADAS uses your location to determine vehicle speed for headway and collision calculations.</string>
-    <key>NSMotionUsageDescription</key>
-    <string>VisionADAS uses motion sensors to compensate for vehicle pitch changes and improve distance accuracy.</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.visionadas.dashcam</string>
+    <key>CFBundleExecutable</key>
+    <string>VisionADAS</string>
+    <key>CFBundleName</key>
+    <string>VisionADAS</string>
+    <key>CFBundleDisplayName</key>
+    <string>VisionADAS</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
-    <key>UIRequiresFullScreen</key>
-    <true/>
-    <key>UIStatusBarHidden</key>
-    <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Camera access is required for real-time ADAS road monitoring.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Location access is required to compute real-time vehicle speed.</string>
 </dict>
 </plist>
