@@ -1,17 +1,85 @@
 import SwiftUI
 
+/// A perspective-correct 3D lane overlay (road carpet).
+public struct LaneCarpetView: View {
+    public let vpYNormalized: Double
+    public let viewSize: CGSize
+    
+    public init(vpYNormalized: Double, viewSize: CGSize) {
+        self.vpYNormalized = vpYNormalized
+        self.viewSize = viewSize
+    }
+    
+    public var body: some View {
+        // Perspective Trapezoid Path
+        Path { path in
+            let vpX = viewSize.width * 0.5
+            let vpY = viewSize.height * vpYNormalized
+            let bottomY = viewSize.height * 0.82
+            
+            // Widths mapping to OnlineCalibrator logic (12% at horizon, 40% at hood/bumper)
+            let topHalfWidth = viewSize.width * 0.06
+            let bottomHalfWidth = viewSize.width * 0.20
+            
+            path.move(to: CGPoint(x: vpX - topHalfWidth, y: vpY))
+            path.addLine(to: CGPoint(x: vpX + topHalfWidth, y: vpY))
+            path.addLine(to: CGPoint(x: vpX + bottomHalfWidth, y: bottomY))
+            path.addLine(to: CGPoint(x: vpX - bottomHalfWidth, y: bottomY))
+            path.closeSubpath()
+        }
+        .fill(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color.green.opacity(0.0),
+                    Color.green.opacity(0.25)
+                ]),
+                startPoint: UnitPoint(x: 0.5, y: vpYNormalized),
+                endPoint: UnitPoint(x: 0.5, y: 0.82)
+            )
+        )
+        // Draw crisp edge lines for the lane boundaries
+        .overlay(
+            Path { path in
+                let vpX = viewSize.width * 0.5
+                let vpY = viewSize.height * vpYNormalized
+                let bottomY = viewSize.height * 0.82
+                let topHalfWidth = viewSize.width * 0.06
+                let bottomHalfWidth = viewSize.width * 0.20
+                
+                // Left lane line
+                path.move(to: CGPoint(x: vpX - topHalfWidth, y: vpY))
+                path.addLine(to: CGPoint(x: vpX - bottomHalfWidth, y: bottomY))
+                
+                // Right lane line
+                path.move(to: CGPoint(x: vpX + topHalfWidth, y: vpY))
+                path.addLine(to: CGPoint(x: vpX + bottomHalfWidth, y: bottomY))
+            }
+            .stroke(
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color.white.opacity(0.1),
+                        Color.cyan.opacity(0.6)
+                    ]),
+                    startPoint: UnitPoint(x: 0.5, y: vpYNormalized),
+                    endPoint: UnitPoint(x: 0.5, y: 0.82)
+                ),
+                lineWidth: 2.0
+            )
+        )
+    }
+}
+
 /// Clean, compact ADAS Heads-Up Display for highway driving.
 ///
-/// Top telemetry banner: Lead Distance | Lead Speed | Time Headway.
-/// Bounding boxes: Lead vehicle gets color-coded box + floating tag; non-lead vehicles render as faint green outlines.
-/// Vietnamese highway regulation (Thông tư 31/2019/TT-BGTVT) safe following distance warnings.
-/// Forward Collision Warning (FCW) with pulsing ⚠️ BRAKE overlay.
+/// Contains visual 3D lane overlay, tracked vehicle bounding boxes,
+/// and dynamic typography mapping.
 public struct ADASHUDView: View {
     
     public let hostSpeedKmh: Double
     public let leadState: LeadVehicleState?
     public let leadTrackId: Int?
     public let trackedVehicles: [TrackedVehicle]
+    public let vpYNormalized: Double
     public let viewSize: CGSize
     
     @State private var isPulsing: Bool = false
@@ -21,17 +89,22 @@ public struct ADASHUDView: View {
         leadState: LeadVehicleState?,
         leadTrackId: Int?,
         trackedVehicles: [TrackedVehicle],
+        vpYNormalized: Double,
         viewSize: CGSize
     ) {
         self.hostSpeedKmh = hostSpeedKmh
         self.leadState = leadState
         self.leadTrackId = leadTrackId
         self.trackedVehicles = trackedVehicles
+        self.vpYNormalized = vpYNormalized
         self.viewSize = viewSize
     }
     
     public var body: some View {
         ZStack {
+            // MARK: - 0. Visual 3D Road Carpet Overlay
+            LaneCarpetView(vpYNormalized: vpYNormalized, viewSize: viewSize)
+            
             // MARK: - 1. Vehicle Bounding Boxes & Floating Tags
             ForEach(trackedVehicles, id: \.trackId) { vehicle in
                 let isLead = (vehicle.trackId == leadTrackId && leadState != nil)

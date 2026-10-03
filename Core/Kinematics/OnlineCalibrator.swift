@@ -48,11 +48,11 @@ public class OnlineCalibrator {
         }
 
         // 3. Vision ground truth anchor
-        let anchorVehicle = distantDetections.first { box in
+        let anchorVehicle = distantDetections.filter { box in
             box.boundingBox.height < 0.05 && 
             box.boundingBox.midX >= 0.35 && 
             box.boundingBox.midX <= 0.65
-        }
+        }.min(by: { $0.bottomY < $1.bottomY })
         
         if let anchor = anchorVehicle {
             let visualHorizonY = anchor.bottomY * frameHeight - 4.0

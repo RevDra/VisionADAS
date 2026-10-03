@@ -19,6 +19,7 @@ public struct DashboardView: View {
                     leadState: viewModel.leadState,
                     leadTrackId: viewModel.leadTrackId,
                     trackedVehicles: viewModel.trackedVehicles,
+                    vpYNormalized: viewModel.vpYNormalized,
                     viewSize: geometry.size
                 )
             }
@@ -44,6 +45,7 @@ public final class ADASViewModel: ObservableObject {
     @Published public private(set) var leadTrackId: Int? = nil
     @Published public private(set) var hostSpeedKmh: Double = 0.0
     @Published public private(set) var droppedFrameCount: Int = 0
+    @Published public private(set) var vpYNormalized: Double = 530.0 / 1080.0
     
     // MARK: - Subsystems
     
@@ -126,11 +128,12 @@ public final class ADASViewModel: ObservableObject {
             
             // Step 4: Lead vehicle selection
             // Criteria: closest vehicle that is (1) inside the lane funnel,
-            // (2) actively moving (absoluteSpeed > 6 km/h), (3) not a near-false-target
+            // (2) actively moving (absoluteSpeed > 6 km/h) unless host is slow, (3) not a near-false-target
             let leadVehicle = self.tracker.selectLeadVehicle(hostSpeedKmh: hostSpeed)
             
             let updatedLeadState = leadVehicle?.state
             let updatedLeadTrackId = leadVehicle?.trackId
+            let updatedVpYNorm = self.calibrator.vpYNormalized
             
             // Step 5: Dispatch clean state to MainActor for SwiftUI rendering
             DispatchQueue.main.async {
@@ -139,6 +142,7 @@ public final class ADASViewModel: ObservableObject {
                 self.leadTrackId = updatedLeadTrackId
                 self.hostSpeedKmh = hostSpeed
                 self.droppedFrameCount = self.cameraManager.droppedFrames
+                self.vpYNormalized = updatedVpYNorm
             }
             
             // Release frame buffer back to AVFoundation ISP pool

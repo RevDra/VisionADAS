@@ -199,7 +199,11 @@ public class MultiObjectTracker {
         confirmed.sort { $0.state.distance < $1.state.distance }
         
         return confirmed.first { tv in
-            tv.isInLane && tv.state.absoluteSpeedKmh > 6.0 && tv.state.distance > 3.0
+            if hostSpeedKmh > 15.0 {
+                return tv.isInLane && tv.state.absoluteSpeedKmh > 6.0 && tv.state.distance > 3.0
+            } else {
+                return tv.isInLane && tv.state.distance > 3.0
+            }
         }
     }
 
