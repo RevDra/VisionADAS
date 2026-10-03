@@ -19,10 +19,7 @@ public struct DashboardView: View {
                     leadState: viewModel.leadState,
                     leadTrackId: viewModel.leadTrackId,
                     trackedVehicles: viewModel.trackedVehicles,
-                    activeLeadVehicle: viewModel.activeLeadVehicle,
-                    vpXNormalized: viewModel.vpXNormalized,
                     vpYNormalized: viewModel.vpYNormalized,
-                    detectedLane: viewModel.detectedLane,
                     viewSize: geometry.size
                 )
             }
@@ -46,9 +43,7 @@ public final class ADASViewModel: ObservableObject {
     @Published public private(set) var activeLeadVehicle: TrackedVehicle? = nil
     @Published public private(set) var hostSpeedKmh: Double = 0.0
     @Published public private(set) var droppedFrameCount: Int = 0
-    @Published public private(set) var vpXNormalized: Double = 0.5
     @Published public private(set) var vpYNormalized: Double = 530.0 / 1080.0
-    @Published public private(set) var detectedLane: DetectedLane? = nil
     
     // MARK: - Subsystems
     
@@ -122,12 +117,13 @@ public final class ADASViewModel: ObservableObject {
                 calibrator: self.calibrator
             )
             
-            // Step 5: Lead vehicle selection
+            // Step 4: Lead vehicle selection
+            // Criteria: closest vehicle that is (1) inside the lane funnel,
+            // (2) actively moving (absoluteSpeed > 6 km/h) unless host is slow, (3) not a near-false-target
             let leadVehicle = self.tracker.selectLeadVehicle(hostSpeedKmh: hostSpeed)
             
             let updatedLeadState = leadVehicle?.state
             let updatedLeadTrackId = leadVehicle?.trackId
-            let updatedVpXNorm = self.calibrator.vpXNormalized
             let updatedVpYNorm = self.calibrator.vpYNormalized
             
             // Step 6: Dispatch clean state to MainActor for SwiftUI rendering
@@ -138,9 +134,7 @@ public final class ADASViewModel: ObservableObject {
                 self.leadTrackId = updatedLeadTrackId
                 self.hostSpeedKmh = hostSpeed
                 self.droppedFrameCount = self.cameraManager.droppedFrames
-                self.vpXNormalized = updatedVpXNorm
                 self.vpYNormalized = updatedVpYNorm
-                self.detectedLane = currentLane
             }
             
             self.cameraManager.finishProcessing()

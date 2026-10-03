@@ -57,11 +57,7 @@ public final class LeadKalmanFilter {
         // Frame 2: Seed relative velocity directly to prevent stationary cars inheriting host speed
         if updatesCount == 2 && dt > 0.01 {
             let instantVRel = (measuredDistance - prevRawDistance) / dt
-            if hostSpeedMs > (15.0 / 3.6) && abs(instantVRel - (-hostSpeedMs)) < 2.0 {
-                self.state[1] = -hostSpeedMs
-            } else {
-                self.state[1] = max(-hostSpeedMs - 4.0, min(12.0, instantVRel))
-            }
+            self.state[1] = max(-hostSpeedMs - 4.0, min(12.0, instantVRel))
         }
         self.prevRawDistance = measuredDistance
         

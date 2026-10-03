@@ -1,191 +1,85 @@
 import SwiftUI
 
-// MARK: - 1. Dynamic 3D Adaptive Lane Carpet
-
+/// A perspective-correct 3D lane overlay (road carpet).
 public struct LaneCarpetView: View {
-    public let leadVehicle: TrackedVehicle?
-    public let detectedLane: DetectedLane?
-    public let vpXNormalized: Double
     public let vpYNormalized: Double
     public let viewSize: CGSize
-    public let state: LeadVehicleState?
     
-    // xADAS Neon Colors
-    private let neonGreen = Color(red: 0.0, green: 1.0, blue: 0.35)
-    private let neonAmber = Color(red: 1.0, green: 0.7, blue: 0.0)
-    private let neonRed = Color(red: 1.0, green: 0.09, blue: 0.27)
-    
-    private var carpetColor: Color {
-        guard let state = state else { return neonGreen }
-        if let ttc = state.timeToCollision, ttc < 1.5 { return neonRed }
-        if let headway = state.headwaySeconds {
-            if headway < 1.5 { return neonRed }
-            if headway <= 2.2 { return neonAmber }
-        }
-        return neonGreen
-    }
-    
-    public init(
-        leadVehicle: TrackedVehicle?,
-        detectedLane: DetectedLane?,
-        vpXNormalized: Double,
-        vpYNormalized: Double,
-        viewSize: CGSize,
-        state: LeadVehicleState?
-    ) {
-        self.leadVehicle = leadVehicle
-        self.detectedLane = detectedLane
-        self.vpXNormalized = vpXNormalized
+    public init(vpYNormalized: Double, viewSize: CGSize) {
         self.vpYNormalized = vpYNormalized
         self.viewSize = viewSize
-        self.state = state
     }
     
     public var body: some View {
-        let paths = generatePaths()
-        let clipY = leadVehicle.map { viewSize.height * min(CGFloat($0.detection.bottomY), 0.78) } ?? (viewSize.height * vpYNormalized)
-        
-        ZStack {
-            // 1. Fill Gradient
-            paths.full
-                .fill(
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            carpetColor.opacity(0.20),
-                            carpetColor.opacity(0.70)
-                        ]),
-                        startPoint: UnitPoint(x: 0.5, y: clipY / viewSize.height),
-                        endPoint: UnitPoint(x: 0.5, y: 0.85)
-                    )
-                )
+        // Perspective Trapezoid Path
+        Path { path in
+            let vpX = viewSize.width * 0.5
+            let vpY = viewSize.height * vpYNormalized
+            let bottomY = viewSize.height * 0.82
             
-            // 2. Crisp Neon Boundary Lines with Glow
-            paths.left
-                .stroke(carpetColor, lineWidth: 3.5)
-                .shadow(color: carpetColor.opacity(0.85), radius: 6)
-                
-            paths.right
-                .stroke(carpetColor, lineWidth: 3.5)
-                .shadow(color: carpetColor.opacity(0.85), radius: 6)
-            
-            // 3. Perspective Depth Chevrons
-            Path { path in
-                for (l, r) in paths.steps {
-                    let cx = (l.x + r.x) / 2
-                    let cy = (l.y + r.y) / 2 - 6
-                    path.move(to: l)
-                    path.addLine(to: CGPoint(x: cx, y: cy))
-                    path.addLine(to: r)
-                }
-            }
-            .stroke(carpetColor.opacity(0.5), lineWidth: 2.0)
-        }
-    }
-    
-    private func generatePaths() -> (left: Path, right: Path, full: Path, steps: [(CGPoint, CGPoint)]) {
-        let bottomY = viewSize.height * 0.85
-        let clipY = leadVehicle.map { viewSize.height * min(CGFloat($0.detection.bottomY), 0.78) } ?? (viewSize.height * vpYNormalized)
-        
-        var leftPoints = [CGPoint]()
-        var rightPoints = [CGPoint]()
-        
-        if let lane = detectedLane, lane.isValid {
-            // Draw real road lane
-            for p in lane.leftBoundary {
-                let py = p.y * viewSize.height
-                if py >= clipY && py <= bottomY {
-                    leftPoints.append(CGPoint(x: p.x * viewSize.width, y: py))
-                }
-            }
-            for p in lane.rightBoundary {
-                let py = p.y * viewSize.height
-                if py >= clipY && py <= bottomY {
-                    rightPoints.append(CGPoint(x: p.x * viewSize.width, y: py))
-                }
-            }
-        } else {
-            // Fallback: Dynamic Vanishing Point funnel
-            let topCenterX = viewSize.width * vpXNormalized
+            // Widths mapping to OnlineCalibrator logic (12% at horizon, 40% at hood/bumper)
             let topHalfWidth = viewSize.width * 0.06
-            let bottomCenterX = viewSize.width * 0.5
-            let bottomHalfWidth = viewSize.width * 0.24
+            let bottomHalfWidth = viewSize.width * 0.20
             
-            let topLeft = CGPoint(x: topCenterX - topHalfWidth, y: clipY)
-            let topRight = CGPoint(x: topCenterX + topHalfWidth, y: clipY)
-            let bottomLeft = CGPoint(x: bottomCenterX - bottomHalfWidth, y: bottomY)
-            let bottomRight = CGPoint(x: bottomCenterX + bottomHalfWidth, y: bottomY)
-            
-            let steps = 10
-            for i in 0...steps {
-                let t = CGFloat(i) / CGFloat(steps)
-                let omt = 1.0 - t
-                let midY = (clipY + bottomY) / 2
-                let ctrlLeft = CGPoint(x: (topLeft.x + bottomLeft.x) / 2 - 15, y: midY)
-                let ctrlRight = CGPoint(x: (topRight.x + bottomRight.x) / 2 + 15, y: midY)
+            path.move(to: CGPoint(x: vpX - topHalfWidth, y: vpY))
+            path.addLine(to: CGPoint(x: vpX + topHalfWidth, y: vpY))
+            path.addLine(to: CGPoint(x: vpX + bottomHalfWidth, y: bottomY))
+            path.addLine(to: CGPoint(x: vpX - bottomHalfWidth, y: bottomY))
+            path.closeSubpath()
+        }
+        .fill(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color.green.opacity(0.0),
+                    Color.green.opacity(0.25)
+                ]),
+                startPoint: UnitPoint(x: 0.5, y: vpYNormalized),
+                endPoint: UnitPoint(x: 0.5, y: 0.82)
+            )
+        )
+        // Draw crisp edge lines for the lane boundaries
+        .overlay(
+            Path { path in
+                let vpX = viewSize.width * 0.5
+                let vpY = viewSize.height * vpYNormalized
+                let bottomY = viewSize.height * 0.82
+                let topHalfWidth = viewSize.width * 0.06
+                let bottomHalfWidth = viewSize.width * 0.20
                 
-                let lx = (omt * omt * topLeft.x) + (2 * omt * t * ctrlLeft.x) + (t * t * bottomLeft.x)
-                let ly = (omt * omt * topLeft.y) + (2 * omt * t * ctrlLeft.y) + (t * t * bottomLeft.y)
-                leftPoints.append(CGPoint(x: lx, y: ly))
+                // Left lane line
+                path.move(to: CGPoint(x: vpX - topHalfWidth, y: vpY))
+                path.addLine(to: CGPoint(x: vpX - bottomHalfWidth, y: bottomY))
                 
-                let rx = (omt * omt * topRight.x) + (2 * omt * t * ctrlRight.x) + (t * t * bottomRight.x)
-                let ry = (omt * omt * topRight.y) + (2 * omt * t * ctrlRight.y) + (t * t * bottomRight.y)
-                rightPoints.append(CGPoint(x: rx, y: ry))
+                // Right lane line
+                path.move(to: CGPoint(x: vpX + topHalfWidth, y: vpY))
+                path.addLine(to: CGPoint(x: vpX + bottomHalfWidth, y: bottomY))
             }
-        }
-        
-        var leftPath = Path()
-        if let first = leftPoints.first {
-            leftPath.move(to: first)
-            for p in leftPoints.dropFirst() { leftPath.addLine(to: p) }
-        }
-        
-        var rightPath = Path()
-        if let first = rightPoints.first {
-            rightPath.move(to: first)
-            for p in rightPoints.dropFirst() { rightPath.addLine(to: p) }
-        }
-        
-        var fullPath = leftPath
-        if let lastR = rightPoints.last, !leftPoints.isEmpty {
-            fullPath.addLine(to: lastR)
-            for p in rightPoints.reversed().dropFirst() {
-                fullPath.addLine(to: p)
-            }
-            if let firstL = leftPoints.first {
-                fullPath.addLine(to: firstL)
-            }
-        }
-        fullPath.closeSubpath()
-        
-        // Depth Chevrons (non-linear spacing)
-        var stepsList = [(CGPoint, CGPoint)]()
-        let numSteps = 5
-        for i in 1..<numSteps {
-            let t = pow(CGFloat(i) / CGFloat(numSteps), 1.5)
-            let idxL = Int(CGFloat(leftPoints.count - 1) * t)
-            let idxR = Int(CGFloat(rightPoints.count - 1) * t)
-            if idxL >= 0 && idxL < leftPoints.count && idxR >= 0 && idxR < rightPoints.count {
-                stepsList.append((leftPoints[idxL], rightPoints[idxR]))
-            }
-        }
-        
-        return (leftPath, rightPath, fullPath, stepsList)
+            .stroke(
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        Color.white.opacity(0.1),
+                        Color.cyan.opacity(0.6)
+                    ]),
+                    startPoint: UnitPoint(x: 0.5, y: vpYNormalized),
+                    endPoint: UnitPoint(x: 0.5, y: 0.82)
+                ),
+                lineWidth: 2.0
+            )
+        )
     }
 }
 
-// MARK: - 2. HUD Container
-
-/// Vivid, high-visibility ADAS Heads-Up Display for highway driving.
+/// Clean, compact ADAS Heads-Up Display for highway driving.
+///
+/// Contains visual 3D lane overlay, tracked vehicle bounding boxes,
+/// and dynamic typography mapping.
 public struct ADASHUDView: View {
     
     public let hostSpeedKmh: Double
     public let leadState: LeadVehicleState?
     public let leadTrackId: Int?
     public let trackedVehicles: [TrackedVehicle]
-    public let activeLeadVehicle: TrackedVehicle?
-    public let vpXNormalized: Double
     public let vpYNormalized: Double
-    public let detectedLane: DetectedLane?
     public let viewSize: CGSize
     
     @State private var isPulsing: Bool = false
@@ -195,36 +89,23 @@ public struct ADASHUDView: View {
         leadState: LeadVehicleState?,
         leadTrackId: Int?,
         trackedVehicles: [TrackedVehicle],
-        activeLeadVehicle: TrackedVehicle?,
-        vpXNormalized: Double,
         vpYNormalized: Double,
-        detectedLane: DetectedLane?,
         viewSize: CGSize
     ) {
         self.hostSpeedKmh = hostSpeedKmh
         self.leadState = leadState
         self.leadTrackId = leadTrackId
         self.trackedVehicles = trackedVehicles
-        self.activeLeadVehicle = activeLeadVehicle
-        self.vpXNormalized = vpXNormalized
         self.vpYNormalized = vpYNormalized
-        self.detectedLane = detectedLane
         self.viewSize = viewSize
     }
     
     public var body: some View {
         ZStack {
-            // MARK: Dynamic 3D Road Carpet Overlay
-            LaneCarpetView(
-                leadVehicle: activeLeadVehicle,
-                detectedLane: detectedLane,
-                vpXNormalized: vpXNormalized,
-                vpYNormalized: vpYNormalized,
-                viewSize: viewSize,
-                state: leadState
-            )
+            // MARK: - 0. Visual 3D Road Carpet Overlay
+            LaneCarpetView(vpYNormalized: vpYNormalized, viewSize: viewSize)
             
-            // MARK: Vehicle Bounding Boxes & Floating Tags
+            // MARK: - 1. Vehicle Bounding Boxes & Floating Tags
             ForEach(trackedVehicles, id: \.trackId) { vehicle in
                 let isLead = (vehicle.trackId == leadTrackId && leadState != nil)
                 let rect = screenRect(for: vehicle.detection.boundingBox, in: viewSize)
