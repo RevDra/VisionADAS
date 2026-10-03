@@ -4,26 +4,36 @@ import Vision
 import CoreGraphics
 import CoreVideo
 
-public class YOLO26Detector {
+/// High-performance CoreML detector wrapper for YOLO26n targeting the Apple Neural Engine (ANE).
+///
+/// Highway-optimized: detects only 4-wheelers (`car`, `truck`, `bus`).
+/// Applies geometric exclusion mask to reject hood/wiper reflections (bottomY > 0.80).
+public final class YOLO26Detector {
     
     private var visionModel: VNCoreMLModel?
-    private var rawMLModel: MLModel?
     
-    // 4-wheelers only: Car, Truck, Bus
+    /// Highway 4-wheelers only — no motorcycles, bicycles, or pedestrians
     private let targetLabels: Set<String> = ["car", "truck", "bus"]
     private let confidenceThreshold: Float = 0.42
+    
+    /// Geometric exclusion: reject detections below this normalized Y threshold
+    /// to eliminate vehicle hood, cowl, and wiper reflections
+    private let hoodExclusionY: CGFloat = 0.80
     
     public init() {
         setupModel()
     }
     
+    // MARK: - Model Initialization
+    
     private func setupModel() {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .all
+        configuration.computeUnits = .all // Offload to Apple Neural Engine
         
         var coreMLModel: MLModel?
         let possibleNames = ["yolo26", "yolo26n", "model"]
         
+        // 1. Try compiled .mlmodelc bundles
         for name in possibleNames {
             if let compiledURL = Bundle.main.url(forResource: name, withExtension: "mlmodelc") {
                 coreMLModel = try? MLModel(contentsOf: compiledURL, configuration: configuration)
@@ -31,6 +41,7 @@ public class YOLO26Detector {
             }
         }
         
+        // 2. Fallback: compile .mlpackage on-device
         if coreMLModel == nil {
             for name in possibleNames {
                 if let packageURL = Bundle.main.url(forResource: name, withExtension: "mlpackage") {
@@ -43,14 +54,17 @@ public class YOLO26Detector {
         }
         
         guard let model = coreMLModel else {
-            print("[YOLO26Detector] Error: Model not found in bundle.")
+            print("[YOLO26Detector] Model not found in bundle.")
             return
         }
         
-        self.rawMLModel = model
         self.visionModel = try? VNCoreMLModel(for: model)
     }
     
+    // MARK: - Detection Pipeline
+    
+    /// Performs vehicle detection on a zero-copy CVPixelBuffer.
+    /// Runs synchronously on caller's queue. Thread safe.
     public func detect(pixelBuffer: CVPixelBuffer, completion: @escaping ([Detection]) -> Void) {
         guard let visionModel = visionModel else {
             completion([])
@@ -65,31 +79,44 @@ public class YOLO26Detector {
             
             var detections: [Detection] = []
             
+            // Branch A: Standard Vision recognized object observations
             if let observations = req.results as? [VNRecognizedObjectObservation] {
                 for obs in observations {
                     guard let topLabel = obs.labels.first else { continue }
                     let label = topLabel.identifier.lowercased()
-                    if self.targetLabels.contains(label) && topLabel.confidence >= self.confidenceThreshold {
-                        let bottomY = 1.0 - obs.boundingBox.origin.y
-                        
-                        // Mask out hood/mirror zone (bottom 20% of view)
-                        guard bottomY <= 0.80 else { continue }
-                        
-                        let box = CGRect(
-                            x: obs.boundingBox.origin.x,
-                            y: 1.0 - obs.boundingBox.origin.y - obs.boundingBox.height,
-                            width: obs.boundingBox.width,
-                            height: obs.boundingBox.height
-                        )
-                        detections.append(Detection(label: label, confidence: topLabel.confidence, boundingBox: box, bottomY: bottomY))
-                    }
+                    
+                    guard self.targetLabels.contains(label),
+                          topLabel.confidence >= self.confidenceThreshold else { continue }
+                    
+                    // Vision coords: origin bottom-left. bottomY in UIKit = 1.0 - vision.origin.y
+                    let bottomY = 1.0 - obs.boundingBox.origin.y
+                    
+                    // Hood / wiper exclusion mask
+                    guard bottomY <= self.hoodExclusionY else { continue }
+                    
+                    // Convert Vision (bottom-left origin) → UIKit (top-left origin)
+                    let box = CGRect(
+                        x: obs.boundingBox.origin.x,
+                        y: 1.0 - obs.boundingBox.origin.y - obs.boundingBox.height,
+                        width: obs.boundingBox.width,
+                        height: obs.boundingBox.height
+                    )
+                    
+                    detections.append(Detection(
+                        label: label,
+                        confidence: topLabel.confidence,
+                        boundingBox: box,
+                        bottomY: bottomY
+                    ))
                 }
-            } else if let featureObservations = req.results as? [VNCoreMLFeatureValueObservation],
-                      let multiArray = featureObservations.first?.featureValue.multiArrayValue {
+            }
+            // Branch B: NMS-free raw tensor output [channels, anchors]
+            else if let featureObservations = req.results as? [VNCoreMLFeatureValueObservation],
+                    let multiArray = featureObservations.first?.featureValue.multiArrayValue {
                 detections = self.parseYOLORawTensor(multiArray: multiArray)
             }
             
-            // Sort closest first
+            // Sort closest first (largest bottomY = nearest)
             detections.sort { $0.bottomY > $1.bottomY }
             completion(detections)
         }
@@ -99,6 +126,9 @@ public class YOLO26Detector {
         try? handler.perform([request])
     }
     
+    // MARK: - Raw Tensor Parser (NMS-free YOLO output)
+    
+    /// Parses [channels, anchors] format where channels = [cx, cy, w, h, cls0, cls1, ...]
     private func parseYOLORawTensor(multiArray: MLMultiArray) -> [Detection] {
         let shape = multiArray.shape.map { $0.intValue }
         guard shape.count >= 2 else { return [] }
@@ -109,7 +139,7 @@ public class YOLO26Detector {
         
         let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: multiArray.count)
         
-        // 4-wheelers COCO indices: 2: car, 5: bus, 7: truck
+        // COCO class indices for highway 4-wheelers
         let vehicleClassChannels: [(channel: Int, label: String)] = [
             (4 + 2, "car"),
             (4 + 5, "bus"),
@@ -154,7 +184,9 @@ public class YOLO26Detector {
             let y2 = min(1.0, cy + (h / 2.0))
             
             guard x2 > x1 && y2 > y1 else { continue }
-            guard y2 <= 0.80 else { continue } // Hood exclusion
+            
+            // Hood / wiper exclusion
+            guard y2 <= hoodExclusionY else { continue }
             
             candidates.append(Candidate(
                 label: bestLabel,
@@ -164,6 +196,7 @@ public class YOLO26Detector {
             ))
         }
         
+        // Greedy NMS
         candidates.sort { $0.score > $1.score }
         var kept: [Candidate] = []
         

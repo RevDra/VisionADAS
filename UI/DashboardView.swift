@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import CoreMedia
 
+/// Main dashboard container combining real-time camera preview with ADAS HUD overlay.
 public struct DashboardView: View {
     @StateObject private var viewModel = ADASViewModel()
     
@@ -16,8 +17,8 @@ public struct DashboardView: View {
                 ADASHUDView(
                     hostSpeedKmh: viewModel.hostSpeedKmh,
                     leadState: viewModel.leadState,
-                    leadId: viewModel.leadDetectionId,
-                    detections: viewModel.detections,
+                    leadTrackId: viewModel.leadTrackId,
+                    trackedVehicles: viewModel.trackedVehicles,
                     viewSize: geometry.size
                 )
             }
@@ -27,23 +28,39 @@ public struct DashboardView: View {
     }
 }
 
+// MARK: - ADAS ViewModel (MVVM Pipeline Orchestrator)
+
+/// Coordinates the end-to-end ADAS pipeline:
+/// Camera → YOLO26 → Multi-Object Tracker → Lead Selection → HUD
+///
+/// All heavy computation runs on a dedicated `.userInteractive` serial queue.
+/// UI state is published strictly via `@MainActor` dispatch.
 public final class ADASViewModel: ObservableObject {
     
-    @Published public private(set) var detections: [Detection] = []
+    // MARK: - Published UI State
+    
+    @Published public private(set) var trackedVehicles: [TrackedVehicle] = []
     @Published public private(set) var leadState: LeadVehicleState? = nil
-    @Published public private(set) var leadDetectionId: UUID? = nil
+    @Published public private(set) var leadTrackId: Int? = nil
     @Published public private(set) var hostSpeedKmh: Double = 0.0
     @Published public private(set) var droppedFrameCount: Int = 0
+    
+    // MARK: - Subsystems
     
     public let cameraManager = CameraManager()
     private let motionManager = MotionManager()
     private let gpsManager = GPSManager()
     
+    // Core Vision & Kinematics Engines
     private let detector = YOLO26Detector()
-    private let kalmanFilter = LeadKalmanFilter()
-    private let vpTracker = VanishingPointTracker()
+    private let tracker = MultiObjectTracker()
+    private let calibrator = OnlineCalibrator()
     
-    private let processingQueue = DispatchQueue(label: "com.visionadas.pipeline", qos: .userInteractive)
+    // Dedicated serial queue for zero-latency frame processing
+    private let processingQueue = DispatchQueue(
+        label: "com.visionadas.pipeline",
+        qos: .userInteractive
+    )
     
     public var captureSession: AVCaptureSession {
         return cameraManager.captureSession
@@ -53,92 +70,83 @@ public final class ADASViewModel: ObservableObject {
         setupPipeline()
     }
     
+    // MARK: - Pipeline Wiring
+    
     private func setupPipeline() {
         try? cameraManager.setupCamera()
         
+        // Zero-copy frame delivery callback
         cameraManager.onFrameAvailable = { [weak self] pixelBuffer, presentationTimestamp in
             guard let self = self else { return }
             self.processingQueue.async {
-                self.processFrame(pixelBuffer: pixelBuffer, presentationTimestamp: presentationTimestamp)
+                self.processFrame(
+                    pixelBuffer: pixelBuffer,
+                    presentationTimestamp: presentationTimestamp
+                )
             }
         }
     }
-
+    
+    /// Core per-frame ADAS pipeline executed on the processing serial queue.
+    ///
+    /// Pipeline steps:
+    /// 1. YOLO26 inference (ANE accelerated)
+    /// 2. Vanishing point / lane calibration update
+    /// 3. Multi-Object Tracker update (per-track Kalman filters)
+    /// 4. Lead vehicle selection (in-lane, moving, closest)
+    /// 5. Dispatch to MainActor
     private func processFrame(pixelBuffer: CVPixelBuffer, presentationTimestamp: CMTime) {
         let timestampSec = CMTimeGetSeconds(presentationTimestamp)
+        
+        // Thread-safe sensor snapshots
         let hostSpeed = self.gpsManager.currentSpeedKmh
         let pitchRad = self.motionManager.pitchRadians
         
+        // Step 1: YOLO26 vehicle detection (ANE inference)
         self.detector.detect(pixelBuffer: pixelBuffer) { [weak self] detectedVehicles in
             guard let self = self else { return }
             
-            self.vpTracker.update(
-            currentPitchRad: pitchRad,
-            distantDetections: detectedVehicles,
-            hostSpeedKmh: hostSpeed
+            // Step 2: Update vanishing point calibration
+            self.calibrator.update(
+                currentPitchRad: pitchRad,
+                distantDetections: detectedVehicles,
+                hostSpeedKmh: hostSpeed
             )
-
-            var updatedLeadState: LeadVehicleState? = nil
-            var confirmedLeadId: UUID? = nil
             
-            // 1. Perspective Lane Filter: Trapezoidal driving corridor converging to horizon
-            let inLaneVehicles = detectedVehicles.filter { det in
-                return self.isInsideHostLane(det.boundingBox)
-            }
+            // Step 3: Multi-Object Tracker update
+            // Each detection is matched to persistent tracks via greedy IoU.
+            // Each track maintains its own independent Kalman filter.
+            let tracked = self.tracker.update(
+                detections: detectedVehicles,
+                hostSpeedKmh: hostSpeed,
+                timestamp: timestampSec,
+                vpY: self.calibrator.vpY,
+                calibrator: self.calibrator
+            )
             
-            // 2. Select closest vehicle directly in our driving lane
-            if let candidate = inLaneVehicles.first {
-                let anchoredDistance = GroundPlaneProjector.estimateAnchoredDistance(
-                    boxHeightNorm: Double(candidate.boundingBox.height),
-                    bottomYNorm: Double(candidate.bottomY),
-                    vpY: self.vpTracker.vpY,
-                    label: candidate.label
-                )
+            // Step 4: Lead vehicle selection
+            // Criteria: closest vehicle that is (1) inside the lane funnel,
+            // (2) actively moving (absoluteSpeed > 6 km/h), (3) not a near-false-target
+            let leadVehicle = self.tracker.selectLeadVehicle(hostSpeedKmh: hostSpeed)
             
-                if abs(anchoredDistance - self.kalmanFilter.currentDistance) > 14.0 {
-                    self.kalmanFilter.reset()
-                }
+            let updatedLeadState = leadVehicle?.state
+            let updatedLeadTrackId = leadVehicle?.trackId
             
-                let state = self.kalmanFilter.update(
-                    measuredDistance: anchoredDistance,
-                    hostSpeedKmh: hostSpeed,
-                    timestamp: timestampSec
-                )
-                
-                // Highway ADAS rule: Ignore stationary cars as lead vehicle
-                if state.isStationary && hostSpeed > 10.0 {
-                    updatedLeadState = nil
-                    confirmedLeadId = nil
-                } else {
-                    updatedLeadState = state
-                    confirmedLeadId = candidate.id
-                }
-            } else {
-                updatedLeadState = self.kalmanFilter.coast(
-                    timestamp: timestampSec,
-                    hostSpeedKmh: hostSpeed
-                )
-            }
-            
+            // Step 5: Dispatch clean state to MainActor for SwiftUI rendering
             DispatchQueue.main.async {
-                self.detections = detectedVehicles
+                self.trackedVehicles = tracked
                 self.leadState = updatedLeadState
-                self.leadDetectionId = confirmedLeadId
+                self.leadTrackId = updatedLeadTrackId
                 self.hostSpeedKmh = hostSpeed
                 self.droppedFrameCount = self.cameraManager.droppedFrames
             }
             
+            // Release frame buffer back to AVFoundation ISP pool
             self.cameraManager.finishProcessing()
         }
     }
     
-    /// True trapezoidal perspective lane corridor
-    private func isInsideHostLane(_ box: CGRect) -> Bool {
-        let y = box.maxY
-        let t = max(0.0, min(1.0, (y - 0.49) / (0.80 - 0.49)))
-        let halfWidth = 0.08 + (0.20 * t) // 0.08 at horizon -> 0.28 at bumper
-        return abs(box.midX - 0.50) <= halfWidth
-    }
+    // MARK: - Lifecycle Management
     
     public func startSystems() {
         cameraManager.startSession()
@@ -151,6 +159,5 @@ public final class ADASViewModel: ObservableObject {
         cameraManager.stopSession()
         motionManager.stopUpdates()
         gpsManager.stopTracking()
-        kalmanFilter.reset()
     }
 }

@@ -1,10 +1,17 @@
 import SwiftUI
 
+/// Clean, compact ADAS Heads-Up Display for highway driving.
+///
+/// Top telemetry banner: Lead Distance | Lead Speed | Time Headway.
+/// Bounding boxes: Lead vehicle gets color-coded box + floating tag; non-lead vehicles render as faint green outlines.
+/// Vietnamese highway regulation (Thông tư 31/2019/TT-BGTVT) safe following distance warnings.
+/// Forward Collision Warning (FCW) with pulsing ⚠️ BRAKE overlay.
 public struct ADASHUDView: View {
+    
     public let hostSpeedKmh: Double
     public let leadState: LeadVehicleState?
-    public let leadId: UUID?
-    public let detections: [Detection]
+    public let leadTrackId: Int?
+    public let trackedVehicles: [TrackedVehicle]
     public let viewSize: CGSize
     
     @State private var isPulsing: Bool = false
@@ -12,40 +19,40 @@ public struct ADASHUDView: View {
     public init(
         hostSpeedKmh: Double,
         leadState: LeadVehicleState?,
-        leadId: UUID?,
-        detections: [Detection],
+        leadTrackId: Int?,
+        trackedVehicles: [TrackedVehicle],
         viewSize: CGSize
     ) {
         self.hostSpeedKmh = hostSpeedKmh
         self.leadState = leadState
-        self.leadId = leadId
-        self.detections = detections
+        self.leadTrackId = leadTrackId
+        self.trackedVehicles = trackedVehicles
         self.viewSize = viewSize
     }
     
     public var body: some View {
         ZStack {
             // MARK: - 1. Vehicle Bounding Boxes & Floating Tags
-            ForEach(detections) { detection in
-                let isLead = (detection.id == leadId && leadState != nil)
-                let rect = screenRect(for: detection.boundingBox, in: viewSize)
-                let color = boxColor(isLead: isLead)
-                let width: CGFloat = isLead ? 3.0 : 1.2
+            ForEach(trackedVehicles, id: \.trackId) { vehicle in
+                let isLead = (vehicle.trackId == leadTrackId && leadState != nil)
+                let rect = screenRect(for: vehicle.detection.boundingBox, in: viewSize)
+                let color = boxColor(isLead: isLead, state: vehicle.state)
+                let lineWidth: CGFloat = isLead ? 3.0 : 1.2
                 
-                // Detection Bounding Box
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(color, lineWidth: width)
-                    .frame(width: max(10, rect.width), height: max(10, rect.height))
+                // Bounding Box
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(color, lineWidth: lineWidth)
+                    .frame(width: max(8, rect.width), height: max(8, rect.height))
                     .position(x: rect.midX, y: rect.midY)
-                    .opacity(isLead ? 0.95 : 0.45)
+                    .opacity(isLead ? 0.95 : 0.35)
                 
-                // ONLY the in-lane Lead Vehicle receives the floating tag
+                // Floating Tag — ONLY for the active Lead Vehicle
                 if isLead, let state = leadState {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 4) {
                         Text(String(format: "%.0fm", state.distance))
                             .fontWeight(.bold)
                         Text("|")
-                            .opacity(0.6)
+                            .opacity(0.5)
                         Text(String(format: "%.0f km/h", state.absoluteSpeedKmh))
                             .fontWeight(.medium)
                     }
@@ -58,14 +65,14 @@ public struct ADASHUDView: View {
                             .fill(Color.black.opacity(0.75))
                             .overlay(Capsule().stroke(color.opacity(0.8), lineWidth: 1.5))
                     )
-                    .position(x: rect.midX, y: max(26, rect.minY - 18))
+                    .position(x: rect.midX, y: max(24, rect.minY - 18))
                 }
             }
             
-            // MARK: - 2. Restored Original Clean Typography Banner
+            // MARK: - 2. Top Telemetry Banner (3 Columns)
             VStack {
-                HStack(spacing: 32) {
-                    // LEAD DISTANCE
+                HStack(spacing: 28) {
+                    // Column 1: LEAD DISTANCE
                     VStack(alignment: .leading, spacing: 2) {
                         Text("LEAD DISTANCE")
                             .font(.system(size: 10, weight: .bold))
@@ -76,21 +83,21 @@ public struct ADASHUDView: View {
                                     .font(.system(size: 26, weight: .bold, design: .monospaced))
                                     .foregroundColor(.white)
                                 Text("m")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.white.opacity(0.7))
                             }
                         } else {
                             Text("-- m")
                                 .font(.system(size: 26, weight: .bold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                .foregroundColor(.white.opacity(0.25))
                         }
                     }
                     
                     Divider()
-                        .frame(height: 34)
-                        .background(Color.white.opacity(0.2))
+                        .frame(height: 32)
+                        .background(Color.white.opacity(0.15))
                     
-                    // LEAD SPEED
+                    // Column 2: LEAD SPEED
                     VStack(alignment: .leading, spacing: 2) {
                         Text("LEAD SPEED")
                             .font(.system(size: 10, weight: .bold))
@@ -101,21 +108,21 @@ public struct ADASHUDView: View {
                                     .font(.system(size: 26, weight: .bold, design: .monospaced))
                                     .foregroundColor(.cyan)
                                 Text("km/h")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.cyan.opacity(0.8))
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.cyan.opacity(0.7))
                             }
                         } else {
                             Text("-- km/h")
                                 .font(.system(size: 26, weight: .bold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                .foregroundColor(.white.opacity(0.25))
                         }
                     }
                     
                     Divider()
-                        .frame(height: 34)
-                        .background(Color.white.opacity(0.2))
+                        .frame(height: 32)
+                        .background(Color.white.opacity(0.15))
                     
-                    // TIME HEADWAY
+                    // Column 3: TIME HEADWAY
                     VStack(alignment: .leading, spacing: 2) {
                         Text("TIME HEADWAY")
                             .font(.system(size: 10, weight: .bold))
@@ -126,34 +133,52 @@ public struct ADASHUDView: View {
                                     .font(.system(size: 26, weight: .bold, design: .monospaced))
                                     .foregroundColor(headwayColor(headway: headway))
                                 Text("s")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(headwayColor(headway: headway))
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(headwayColor(headway: headway).opacity(0.7))
                             }
                         } else {
                             Text("-- s")
                                 .font(.system(size: 26, weight: .bold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                .foregroundColor(.white.opacity(0.25))
                         }
                     }
                 }
-                .padding(.horizontal, 26)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
                 .background(
-                    RoundedRectangle(cornerRadius: 18)
+                    RoundedRectangle(cornerRadius: 16)
                         .fill(Color.black.opacity(0.65))
                         .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 18)
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.white.opacity(0.10), lineWidth: 1)
                         )
                 )
-                .padding(.top, 14)
+                .padding(.top, 12)
                 
                 Spacer()
             }
             
-            // MARK: - 3. Forward Collision Warning Alert
+            // MARK: - 3. Vietnamese Highway Regulation Warning (Thông tư 31/2019/TT-BGTVT)
+            VStack {
+                Spacer()
+                if let warning = safeDistanceWarning {
+                    Text(warning)
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(Color.red.opacity(0.85))
+                        )
+                        .padding(.bottom, 12)
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+            }
+            
+            // MARK: - 4. Forward Collision Warning (FCW) Alert
             if isCriticalDanger {
                 ZStack {
                     RadialGradient(
@@ -164,13 +189,11 @@ public struct ADASHUDView: View {
                     )
                     .ignoresSafeArea()
                     
-                    VStack(spacing: 8) {
-                        Text("⚠️ BRAKE")
-                            .font(.system(size: 58, weight: .heavy, design: .rounded))
-                            .foregroundColor(.white)
-                            .shadow(color: .red, radius: 16)
-                    }
-                    .scaleEffect(isPulsing ? 1.04 : 0.96)
+                    Text("⚠️ BRAKE")
+                        .font(.system(size: 56, weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white)
+                        .shadow(color: .red, radius: 16)
+                        .scaleEffect(isPulsing ? 1.04 : 0.96)
                 }
                 .transition(.opacity)
             }
@@ -182,16 +205,37 @@ public struct ADASHUDView: View {
         }
     }
     
+    // MARK: - Safety Logic
+    
     private var isCriticalDanger: Bool {
         guard let state = leadState, hostSpeedKmh > 25.0 else { return false }
         if let ttc = state.timeToCollision, ttc < 1.8 { return true }
         return false
     }
     
-    private func boxColor(isLead: Bool) -> Color {
-        guard isLead, let state = leadState else {
-            return Color.green.opacity(0.5) // Adjacent lane vehicles
+    /// Vietnamese Highway Regulation (Thông tư 31/2019/TT-BGTVT) safe distance warning.
+    /// Active only when host speed exceeds 60 km/h.
+    private var safeDistanceWarning: String? {
+        guard hostSpeedKmh > 60.0, let state = leadState else { return nil }
+        
+        let minimumDistance: Double
+        if hostSpeedKmh > 100.0 {
+            minimumDistance = 100.0
+        } else if hostSpeedKmh > 80.0 {
+            minimumDistance = 70.0
+        } else {
+            minimumDistance = 55.0
         }
+        
+        guard state.distance < minimumDistance else { return nil }
+        
+        return "GẦN HƠN QUY ĐỊNH (\(Int(state.distance))m / Tối thiểu \(Int(minimumDistance))m)"
+    }
+    
+    // MARK: - Styling Helpers
+    
+    private func boxColor(isLead: Bool, state: LeadVehicleState) -> Color {
+        guard isLead else { return Color.green.opacity(0.5) }
         if isCriticalDanger { return .red }
         if let headway = state.headwaySeconds {
             if headway > 2.4 { return .green }

@@ -34,6 +34,7 @@ public final class LeadKalmanFilter {
         return max(0.5, 0.002 * pow(distance, 2.0))
     }
     
+    @discardableResult
     public func update(
         measuredDistance: Double,
         hostSpeedKmh: Double,
