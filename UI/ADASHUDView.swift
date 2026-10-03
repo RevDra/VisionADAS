@@ -110,12 +110,11 @@ public struct ADASHUDView: View {
                 let isLead = (vehicle.trackId == leadTrackId && leadState != nil)
                 let rect = screenRect(for: vehicle.detection.boundingBox, in: viewSize)
                 let color = boxColor(isLead: isLead, state: vehicle.state)
-                let lineWidth: CGFloat = isLead ? 3.5 : 1.2
+                let lineWidth: CGFloat = isLead ? 3.0 : 1.2
                 
                 // Bounding Box
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 5)
                     .stroke(color, lineWidth: lineWidth)
-                    .shadow(color: isLead ? color.opacity(0.8) : .clear, radius: isLead ? 6 : 0)
                     .frame(width: max(8, rect.width), height: max(8, rect.height))
                     .position(x: rect.midX, y: rect.midY)
                     .opacity(isLead ? 0.95 : 0.35)
@@ -128,148 +127,146 @@ public struct ADASHUDView: View {
                         Text("|")
                             .opacity(0.5)
                         Text(String(format: "%.0f km/h", state.absoluteSpeedKmh))
-                            .fontWeight(.bold)
+                            .fontWeight(.medium)
                     }
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(Color.black.opacity(0.85))
-                            .overlay(Capsule().stroke(color, lineWidth: 2))
+                            .fill(Color.black.opacity(0.75))
+                            .overlay(Capsule().stroke(color.opacity(0.8), lineWidth: 1.5))
                     )
-                    .shadow(color: color.opacity(0.6), radius: 4)
-                    .position(x: rect.midX, y: max(24, rect.minY - 22))
+                    .position(x: rect.midX, y: max(24, rect.minY - 18))
                 }
             }
             
-            // MARK: Top Telemetry Banner
+            // MARK: - 2. Top Telemetry Banner (3 Columns)
             VStack {
                 HStack(spacing: 28) {
-                    // LEAD DISTANCE
+                    // Column 1: LEAD DISTANCE
                     VStack(alignment: .leading, spacing: 2) {
                         Text("LEAD DISTANCE")
-                            .font(.system(size: 10, weight: .heavy))
-                            .foregroundColor(.white.opacity(0.65))
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.6))
                         if let state = leadState {
                             HStack(alignment: .firstTextBaseline, spacing: 2) {
                                 Text(String(format: "%.0f", state.distance))
-                                    .font(.system(size: 26, weight: .heavy, design: .monospaced))
+                                    .font(.system(size: 26, weight: .bold, design: .monospaced))
                                     .foregroundColor(.white)
                                 Text("m")
                                     .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(.white.opacity(0.7))
                             }
                         } else {
                             Text("-- m")
-                                .font(.system(size: 26, weight: .heavy, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                .font(.system(size: 26, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.25))
                         }
                     }
                     
                     Divider()
-                        .frame(height: 34)
-                        .background(Color.white.opacity(0.2))
+                        .frame(height: 32)
+                        .background(Color.white.opacity(0.15))
                     
-                    // LEAD SPEED
+                    // Column 2: LEAD SPEED
                     VStack(alignment: .leading, spacing: 2) {
                         Text("LEAD SPEED")
-                            .font(.system(size: 10, weight: .heavy))
-                            .foregroundColor(.white.opacity(0.65))
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.6))
                         if let state = leadState {
                             HStack(alignment: .firstTextBaseline, spacing: 2) {
                                 Text(String(format: "%.0f", state.absoluteSpeedKmh))
-                                    .font(.system(size: 26, weight: .heavy, design: .monospaced))
+                                    .font(.system(size: 26, weight: .bold, design: .monospaced))
                                     .foregroundColor(.cyan)
                                 Text("km/h")
                                     .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(.cyan.opacity(0.8))
+                                    .foregroundColor(.cyan.opacity(0.7))
                             }
                         } else {
                             Text("-- km/h")
-                                .font(.system(size: 26, weight: .heavy, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                .font(.system(size: 26, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.25))
                         }
                     }
                     
                     Divider()
-                        .frame(height: 34)
-                        .background(Color.white.opacity(0.2))
+                        .frame(height: 32)
+                        .background(Color.white.opacity(0.15))
                     
-                    // TIME HEADWAY
+                    // Column 3: TIME HEADWAY
                     VStack(alignment: .leading, spacing: 2) {
                         Text("TIME HEADWAY")
-                            .font(.system(size: 10, weight: .heavy))
-                            .foregroundColor(.white.opacity(0.65))
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.6))
                         if let headway = leadState?.headwaySeconds {
                             HStack(alignment: .firstTextBaseline, spacing: 2) {
                                 Text(String(format: "%.1f", headway))
-                                    .font(.system(size: 26, weight: .heavy, design: .monospaced))
+                                    .font(.system(size: 26, weight: .bold, design: .monospaced))
                                     .foregroundColor(headwayColor(headway: headway))
                                 Text("s")
                                     .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(headwayColor(headway: headway).opacity(0.8))
+                                    .foregroundColor(headwayColor(headway: headway).opacity(0.7))
                             }
                         } else {
                             Text("-- s")
-                                .font(.system(size: 26, weight: .heavy, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                .font(.system(size: 26, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.25))
                         }
                     }
                 }
-                .padding(.horizontal, 26)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 10)
                 .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(Color.black.opacity(0.75))
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.black.opacity(0.65))
                         .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 18)
-                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.white.opacity(0.10), lineWidth: 1)
                         )
                 )
-                .padding(.top, 14)
+                .padding(.top, 12)
                 
                 Spacer()
             }
             
-            // MARK: Vietnamese Highway Regulation Warning (Thông tư 31/2019/TT-BGTVT)
+            // MARK: - 3. Vietnamese Highway Regulation Warning (Thông tư 31/2019/TT-BGTVT)
             VStack {
                 Spacer()
                 if let warning = safeDistanceWarning {
                     Text(warning)
-                        .font(.system(size: 15, weight: .heavy, design: .monospaced))
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                         .background(
                             Capsule()
-                                .fill(Color.red.opacity(0.9))
+                                .fill(Color.red.opacity(0.85))
                         )
-                        .shadow(color: .red.opacity(0.5), radius: 6)
-                        .padding(.bottom, 16)
+                        .padding(.bottom, 12)
                         .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
             }
             
-            // MARK: Forward Collision Warning (FCW) Alert
+            // MARK: - 4. Forward Collision Warning (FCW) Alert
             if isCriticalDanger {
                 ZStack {
                     RadialGradient(
-                        gradient: Gradient(colors: [Color.clear, Color.red.opacity(isPulsing ? 0.8 : 0.3)]),
+                        gradient: Gradient(colors: [Color.clear, Color.red.opacity(isPulsing ? 0.7 : 0.2)]),
                         center: .center,
-                        startRadius: viewSize.width * 0.20,
-                        endRadius: viewSize.width * 0.65
+                        startRadius: viewSize.width * 0.25,
+                        endRadius: viewSize.width * 0.6
                     )
                     .ignoresSafeArea()
                     
                     Text("⚠️ BRAKE")
-                        .font(.system(size: 64, weight: .black, design: .monospaced))
+                        .font(.system(size: 56, weight: .heavy, design: .monospaced))
                         .foregroundColor(.white)
-                        .shadow(color: .red, radius: 20)
-                        .scaleEffect(isPulsing ? 1.05 : 0.95)
+                        .shadow(color: .red, radius: 16)
+                        .scaleEffect(isPulsing ? 1.04 : 0.96)
                 }
                 .transition(.opacity)
             }
@@ -289,6 +286,8 @@ public struct ADASHUDView: View {
         return false
     }
     
+    /// Vietnamese Highway Regulation (Thông tư 31/2019/TT-BGTVT) safe distance warning.
+    /// Active only when host speed exceeds 60 km/h.
     private var safeDistanceWarning: String? {
         guard hostSpeedKmh > 60.0, let state = leadState else { return nil }
         
@@ -309,20 +308,20 @@ public struct ADASHUDView: View {
     // MARK: - Styling Helpers
     
     private func boxColor(isLead: Bool, state: LeadVehicleState) -> Color {
-        guard isLead else { return Color(red: 0.0, green: 1.0, blue: 0.35).opacity(0.6) } // Faint neon green
-        if isCriticalDanger { return Color(red: 1.0, green: 0.09, blue: 0.27) } // Neon Red
+        guard isLead else { return Color.green.opacity(0.5) }
+        if isCriticalDanger { return .red }
         if let headway = state.headwaySeconds {
-            if headway > 2.2 { return Color(red: 0.0, green: 1.0, blue: 0.35) } // Neon Green
-            if headway >= 1.5 { return Color(red: 1.0, green: 0.7, blue: 0.0) } // Neon Amber
-            return Color(red: 1.0, green: 0.09, blue: 0.27) // Neon Red
+            if headway > 2.4 { return .green }
+            if headway >= 1.5 { return .orange }
+            return .red
         }
-        return Color(red: 0.0, green: 1.0, blue: 0.35) // Neon Green
+        return .green
     }
     
     private func headwayColor(headway: Double) -> Color {
-        if headway > 2.2 { return Color(red: 0.0, green: 1.0, blue: 0.35) }
-        if headway >= 1.5 { return Color(red: 1.0, green: 0.7, blue: 0.0) }
-        return Color(red: 1.0, green: 0.09, blue: 0.27)
+        if headway > 2.4 { return .green }
+        if headway >= 1.5 { return .orange }
+        return .red
     }
     
     private func screenRect(for normalizedBox: CGRect, in size: CGSize) -> CGRect {

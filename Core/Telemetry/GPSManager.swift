@@ -1,7 +1,6 @@
 import Foundation
 import CoreLocation
 import Combine
-import os
 
 /// Real-time host vehicle speed provider (v_ego) using CoreLocation (iOS 17+).
 ///
@@ -15,7 +14,8 @@ public final class GPSManager: NSObject, ObservableObject, CLLocationManagerDele
     @Published public private(set) var isStationary: Bool = true
     
     /// Thread-safe speed storage for the serial camera processing queue
-    private let speedLock = OSAllocatedUnfairLock(initialState: 0.0)
+    private var _atomicSpeedKmh: Double = 0.0
+    private let lock = os_unfair_lock_t.allocate(capacity: 1)
     
     private let locationManager = CLLocationManager()
     private var updatesTask: Task<Void, Never>?
@@ -23,6 +23,7 @@ public final class GPSManager: NSObject, ObservableObject, CLLocationManagerDele
     
     public override init() {
         super.init()
+        lock.initialize(to: os_unfair_lock())
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = kCLDistanceFilterNone
         locationManager.activityType = .automotiveNavigation
@@ -31,12 +32,15 @@ public final class GPSManager: NSObject, ObservableObject, CLLocationManagerDele
     
     deinit {
         stopTracking()
+        lock.deallocate()
     }
     
     /// Synchronous, thread-safe access to host speed (km/h).
     /// Safe to call from high-frequency background queues.
     public var currentSpeedKmh: Double {
-        return speedLock.withLock { $0 }
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
+        return _atomicSpeedKmh
     }
     
     /// Requests standard when-in-use location authorization.
@@ -65,12 +69,12 @@ public final class GPSManager: NSObject, ObservableObject, CLLocationManagerDele
                     let speedMs = update.location?.speed ?? -1.0
                     // CLLocation speed is negative if velocity is invalid/undetermined
                     let validSpeedKmh = speedMs >= 0.0 ? (speedMs * 3.6) : 0.0
-                    let stationary = update.stationary || validSpeedKmh < 1.0
+                    let stationary = update.isStationary || validSpeedKmh < 1.0
                     
                     // Update atomic lock for background processing thread
-                    self.speedLock.withLock { state in
-                        state = validSpeedKmh
-                    }
+                    os_unfair_lock_lock(self.lock)
+                    self._atomicSpeedKmh = validSpeedKmh
+                    os_unfair_lock_unlock(self.lock)
                     
                     // Dispatch updates to MainActor for SwiftUI
                     await MainActor.run {
@@ -90,9 +94,9 @@ public final class GPSManager: NSObject, ObservableObject, CLLocationManagerDele
         updatesTask?.cancel()
         updatesTask = nil
         
-        speedLock.withLock { state in
-            state = 0.0
-        }
+        os_unfair_lock_lock(lock)
+        _atomicSpeedKmh = 0.0
+        os_unfair_lock_unlock(lock)
         
         DispatchQueue.main.async {
             self.hostSpeedKmh = 0.0

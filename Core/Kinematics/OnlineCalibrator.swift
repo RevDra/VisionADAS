@@ -21,10 +21,6 @@ public class OnlineCalibrator {
     public var vpYNormalized: Double {
         return vpY / frameHeight
     }
-    
-    public var vpXNormalized: Double {
-        return vpX / frameWidth
-    }
 
     /// Updates the calibration state based on current vehicle kinematics and distant visual detections.
     public func update(currentPitchRad: Double, distantDetections: [Detection], hostSpeedKmh: Double) {
@@ -36,7 +32,7 @@ public class OnlineCalibrator {
                 pitchBaseline = currentPitchRad
             }
 
-            // Track calibration samples
+            // 6. Track calibration samples
             if calibrationSamples < sampleTarget {
                 calibrationSamples += 1
                 calibrationPercent = min(100, Int((Double(calibrationSamples) / Double(sampleTarget)) * 100.0))
@@ -52,24 +48,15 @@ public class OnlineCalibrator {
         }
 
         // 3. Vision ground truth anchor
-        let anchorVehicle = distantDetections.first { box in
+        let anchorVehicle = distantDetections.filter { box in
             box.boundingBox.height < 0.05 && 
             box.boundingBox.midX >= 0.35 && 
             box.boundingBox.midX <= 0.65
-        }
-        
-        var dynamicVpX = 960.0
+        }.min(by: { $0.bottomY < $1.bottomY })
         
         if let anchor = anchorVehicle {
             let visualHorizonY = anchor.bottomY * frameHeight - 4.0
             dynamicVpY = 0.92 * dynamicVpY + 0.08 * visualHorizonY
-            
-            // Extract vpX from anchor's midX
-            let visualHorizonX = anchor.boundingBox.midX * frameWidth
-            dynamicVpX = 0.95 * vpX + 0.05 * visualHorizonX
-        } else {
-            // Decay slowly back to center if no distant anchors
-            dynamicVpX = 0.99 * vpX + 0.01 * 960.0
         }
 
         // 4. Clamp vpY to safe range
@@ -77,14 +64,8 @@ public class OnlineCalibrator {
         let maxVpY = frameHeight * 0.58
         let clampedY = max(minVpY, min(maxVpY, dynamicVpY))
 
-        // Clamp vpX to safe range (40% to 60%)
-        let minVpX = frameWidth * 0.40
-        let maxVpX = frameWidth * 0.60
-        let clampedX = max(minVpX, min(maxVpX, dynamicVpX))
-
         // 5. Smooth
         vpY = (1.0 - 0.05) * vpY + 0.05 * clampedY
-        vpX = clampedX
     }
 
     /// Determines if a detected bounding box is inside the host lane funnel radiating from the VP.
