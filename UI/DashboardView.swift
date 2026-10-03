@@ -19,6 +19,8 @@ public struct DashboardView: View {
                     leadState: viewModel.leadState,
                     leadTrackId: viewModel.leadTrackId,
                     trackedVehicles: viewModel.trackedVehicles,
+                    activeLeadVehicle: viewModel.activeLeadVehicle,
+                    vpXNormalized: viewModel.vpXNormalized,
                     vpYNormalized: viewModel.vpYNormalized,
                     viewSize: geometry.size
                 )
@@ -43,8 +45,10 @@ public final class ADASViewModel: ObservableObject {
     @Published public private(set) var trackedVehicles: [TrackedVehicle] = []
     @Published public private(set) var leadState: LeadVehicleState? = nil
     @Published public private(set) var leadTrackId: Int? = nil
+    @Published public private(set) var activeLeadVehicle: TrackedVehicle? = nil
     @Published public private(set) var hostSpeedKmh: Double = 0.0
     @Published public private(set) var droppedFrameCount: Int = 0
+    @Published public private(set) var vpXNormalized: Double = 0.5
     @Published public private(set) var vpYNormalized: Double = 530.0 / 1080.0
     
     // MARK: - Subsystems
@@ -90,13 +94,6 @@ public final class ADASViewModel: ObservableObject {
     }
     
     /// Core per-frame ADAS pipeline executed on the processing serial queue.
-    ///
-    /// Pipeline steps:
-    /// 1. YOLO26 inference (ANE accelerated)
-    /// 2. Vanishing point / lane calibration update
-    /// 3. Multi-Object Tracker update (per-track Kalman filters)
-    /// 4. Lead vehicle selection (in-lane, moving, closest)
-    /// 5. Dispatch to MainActor
     private func processFrame(pixelBuffer: CVPixelBuffer, presentationTimestamp: CMTime) {
         let timestampSec = CMTimeGetSeconds(presentationTimestamp)
         
@@ -116,8 +113,6 @@ public final class ADASViewModel: ObservableObject {
             )
             
             // Step 3: Multi-Object Tracker update
-            // Each detection is matched to persistent tracks via greedy IoU.
-            // Each track maintains its own independent Kalman filter.
             let tracked = self.tracker.update(
                 detections: detectedVehicles,
                 hostSpeedKmh: hostSpeed,
@@ -127,21 +122,22 @@ public final class ADASViewModel: ObservableObject {
             )
             
             // Step 4: Lead vehicle selection
-            // Criteria: closest vehicle that is (1) inside the lane funnel,
-            // (2) actively moving (absoluteSpeed > 6 km/h) unless host is slow, (3) not a near-false-target
             let leadVehicle = self.tracker.selectLeadVehicle(hostSpeedKmh: hostSpeed)
             
             let updatedLeadState = leadVehicle?.state
             let updatedLeadTrackId = leadVehicle?.trackId
+            let updatedVpXNorm = self.calibrator.vpXNormalized
             let updatedVpYNorm = self.calibrator.vpYNormalized
             
             // Step 5: Dispatch clean state to MainActor for SwiftUI rendering
             DispatchQueue.main.async {
                 self.trackedVehicles = tracked
+                self.activeLeadVehicle = leadVehicle
                 self.leadState = updatedLeadState
                 self.leadTrackId = updatedLeadTrackId
                 self.hostSpeedKmh = hostSpeed
                 self.droppedFrameCount = self.cameraManager.droppedFrames
+                self.vpXNormalized = updatedVpXNorm
                 self.vpYNormalized = updatedVpYNorm
             }
             
