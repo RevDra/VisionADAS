@@ -146,7 +146,7 @@ public struct LaneCarpetView: View {
         }
         
         var fullPath = leftPath
-        if let lastL = leftPoints.last, let lastR = rightPoints.last, let firstR = rightPoints.first {
+        if let lastR = rightPoints.last, !leftPoints.isEmpty {
             fullPath.addLine(to: lastR)
             for p in rightPoints.reversed().dropFirst() {
                 fullPath.addLine(to: p)
