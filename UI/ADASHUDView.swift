@@ -4,6 +4,7 @@ import SwiftUI
 
 public struct LaneCarpetView: View {
     public let leadVehicle: TrackedVehicle?
+    public let detectedLane: DetectedLane?
     public let vpXNormalized: Double
     public let vpYNormalized: Double
     public let viewSize: CGSize
@@ -26,12 +27,14 @@ public struct LaneCarpetView: View {
     
     public init(
         leadVehicle: TrackedVehicle?,
+        detectedLane: DetectedLane?,
         vpXNormalized: Double,
         vpYNormalized: Double,
         viewSize: CGSize,
         state: LeadVehicleState?
     ) {
         self.leadVehicle = leadVehicle
+        self.detectedLane = detectedLane
         self.vpXNormalized = vpXNormalized
         self.vpYNormalized = vpYNormalized
         self.viewSize = viewSize
@@ -39,171 +42,134 @@ public struct LaneCarpetView: View {
     }
     
     public var body: some View {
-        let geom = calculateGeometry()
+        let paths = generatePaths()
+        let clipY = leadVehicle.map { viewSize.height * min(CGFloat($0.detection.bottomY), 0.78) } ?? (viewSize.height * vpYNormalized)
         
         ZStack {
-            // Fill Gradient
-            CarpetShape(geom: geom)
+            // 1. Fill Gradient
+            paths.full
                 .fill(
                     LinearGradient(
                         gradient: Gradient(colors: [
                             carpetColor.opacity(0.20),
-                            carpetColor.opacity(0.65)
+                            carpetColor.opacity(0.70)
                         ]),
-                        startPoint: UnitPoint(x: 0.5, y: geom.topY / viewSize.height),
-                        endPoint: UnitPoint(x: 0.5, y: geom.bottomY / viewSize.height)
+                        startPoint: UnitPoint(x: 0.5, y: clipY / viewSize.height),
+                        endPoint: UnitPoint(x: 0.5, y: 0.85)
                     )
                 )
             
-            // Crisp Neon Boundary Lines with Glow
-            CarpetBorders(geom: geom)
+            // 2. Crisp Neon Boundary Lines with Glow
+            paths.left
                 .stroke(carpetColor, lineWidth: 3.5)
-                .shadow(color: carpetColor.opacity(0.8), radius: 6)
+                .shadow(color: carpetColor.opacity(0.85), radius: 6)
+                
+            paths.right
+                .stroke(carpetColor, lineWidth: 3.5)
+                .shadow(color: carpetColor.opacity(0.85), radius: 6)
             
-            // Perspective Depth Chevrons
-            CarpetChevrons(geom: geom)
-                .stroke(carpetColor.opacity(0.5), lineWidth: 2.0)
+            // 3. Perspective Depth Chevrons
+            Path { path in
+                for (l, r) in paths.steps {
+                    let cx = (l.x + r.x) / 2
+                    let cy = (l.y + r.y) / 2 - 6
+                    path.move(to: l)
+                    path.addLine(to: CGPoint(x: cx, y: cy))
+                    path.addLine(to: r)
+                }
+            }
+            .stroke(carpetColor.opacity(0.5), lineWidth: 2.0)
         }
     }
     
-    struct CarpetGeometry {
-        let topY: CGFloat
-        let topCenterX: CGFloat
-        let topHalfWidth: CGFloat
-        let bottomY: CGFloat
-        let bottomCenterX: CGFloat
-        let bottomHalfWidth: CGFloat
-    }
-    
-    private func calculateGeometry() -> CarpetGeometry {
+    private func generatePaths() -> (left: Path, right: Path, full: Path, steps: [(CGPoint, CGPoint)]) {
         let bottomY = viewSize.height * 0.85
-        let bottomCenterX = viewSize.width * 0.5
-        let bottomHalfWidth = viewSize.width * 0.24
+        let clipY = leadVehicle.map { viewSize.height * min(CGFloat($0.detection.bottomY), 0.78) } ?? (viewSize.height * vpYNormalized)
         
-        let topY: CGFloat
-        let topCenterX: CGFloat
-        let topHalfWidth: CGFloat
+        var leftPoints = [CGPoint]()
+        var rightPoints = [CGPoint]()
         
-        if let lead = leadVehicle {
-            // Anchor to the lead vehicle's tire-road contact line
-            let leadBottomY = lead.detection.bottomY
-            let leadMidX = lead.detection.boundingBox.midX
-            let leadWidth = lead.detection.boundingBox.width
-            
-            topY = viewSize.height * min(CGFloat(leadBottomY), 0.78)
-            topCenterX = viewSize.width * CGFloat(leadMidX)
-            
-            let screenLeadWidth = viewSize.width * CGFloat(leadWidth)
-            topHalfWidth = max(viewSize.width * 0.04, screenLeadWidth * 0.55)
+        if let lane = detectedLane, lane.isValid {
+            // Draw real road lane
+            for p in lane.leftBoundary {
+                let py = p.y * viewSize.height
+                if py >= clipY && py <= bottomY {
+                    leftPoints.append(CGPoint(x: p.x * viewSize.width, y: py))
+                }
+            }
+            for p in lane.rightBoundary {
+                let py = p.y * viewSize.height
+                if py >= clipY && py <= bottomY {
+                    rightPoints.append(CGPoint(x: p.x * viewSize.width, y: py))
+                }
+            }
         } else {
-            // Converge toward the dynamic vanishing point
-            topY = viewSize.height * vpYNormalized
-            topCenterX = viewSize.width * vpXNormalized
-            topHalfWidth = viewSize.width * 0.06
+            // Fallback: Dynamic Vanishing Point funnel
+            let topCenterX = viewSize.width * vpXNormalized
+            let topHalfWidth = viewSize.width * 0.06
+            let bottomCenterX = viewSize.width * 0.5
+            let bottomHalfWidth = viewSize.width * 0.24
+            
+            let topLeft = CGPoint(x: topCenterX - topHalfWidth, y: clipY)
+            let topRight = CGPoint(x: topCenterX + topHalfWidth, y: clipY)
+            let bottomLeft = CGPoint(x: bottomCenterX - bottomHalfWidth, y: bottomY)
+            let bottomRight = CGPoint(x: bottomCenterX + bottomHalfWidth, y: bottomY)
+            
+            let steps = 10
+            for i in 0...steps {
+                let t = CGFloat(i) / CGFloat(steps)
+                let omt = 1.0 - t
+                let midY = (clipY + bottomY) / 2
+                let ctrlLeft = CGPoint(x: (topLeft.x + bottomLeft.x) / 2 - 15, y: midY)
+                let ctrlRight = CGPoint(x: (topRight.x + bottomRight.x) / 2 + 15, y: midY)
+                
+                let lx = (omt * omt * topLeft.x) + (2 * omt * t * ctrlLeft.x) + (t * t * bottomLeft.x)
+                let ly = (omt * omt * topLeft.y) + (2 * omt * t * ctrlLeft.y) + (t * t * bottomLeft.y)
+                leftPoints.append(CGPoint(x: lx, y: ly))
+                
+                let rx = (omt * omt * topRight.x) + (2 * omt * t * ctrlRight.x) + (t * t * bottomRight.x)
+                let ry = (omt * omt * topRight.y) + (2 * omt * t * ctrlRight.y) + (t * t * bottomRight.y)
+                rightPoints.append(CGPoint(x: rx, y: ry))
+            }
         }
         
-        return CarpetGeometry(
-            topY: topY,
-            topCenterX: topCenterX,
-            topHalfWidth: topHalfWidth,
-            bottomY: bottomY,
-            bottomCenterX: bottomCenterX,
-            bottomHalfWidth: bottomHalfWidth
-        )
-    }
-}
-
-// MARK: - Carpet Geometries
-
-private struct CarpetShape: Shape {
-    let geom: LaneCarpetView.CarpetGeometry
-    
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        
-        let topLeft = CGPoint(x: geom.topCenterX - geom.topHalfWidth, y: geom.topY)
-        let topRight = CGPoint(x: geom.topCenterX + geom.topHalfWidth, y: geom.topY)
-        let bottomLeft = CGPoint(x: geom.bottomCenterX - geom.bottomHalfWidth, y: geom.bottomY)
-        let bottomRight = CGPoint(x: geom.bottomCenterX + geom.bottomHalfWidth, y: geom.bottomY)
-        
-        let midY = (geom.topY + geom.bottomY) / 2
-        let ctrlLeft = CGPoint(x: (topLeft.x + bottomLeft.x) / 2 - 15, y: midY)
-        let ctrlRight = CGPoint(x: (topRight.x + bottomRight.x) / 2 + 15, y: midY)
-        
-        path.move(to: topLeft)
-        path.addLine(to: topRight)
-        path.addQuadCurve(to: bottomRight, control: ctrlRight)
-        path.addLine(to: bottomLeft)
-        path.addQuadCurve(to: topLeft, control: ctrlLeft)
-        path.closeSubpath()
-        
-        return path
-    }
-}
-
-private struct CarpetBorders: Shape {
-    let geom: LaneCarpetView.CarpetGeometry
-    
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        
-        let topLeft = CGPoint(x: geom.topCenterX - geom.topHalfWidth, y: geom.topY)
-        let topRight = CGPoint(x: geom.topCenterX + geom.topHalfWidth, y: geom.topY)
-        let bottomLeft = CGPoint(x: geom.bottomCenterX - geom.bottomHalfWidth, y: geom.bottomY)
-        let bottomRight = CGPoint(x: geom.bottomCenterX + geom.bottomHalfWidth, y: geom.bottomY)
-        
-        let midY = (geom.topY + geom.bottomY) / 2
-        let ctrlLeft = CGPoint(x: (topLeft.x + bottomLeft.x) / 2 - 15, y: midY)
-        let ctrlRight = CGPoint(x: (topRight.x + bottomRight.x) / 2 + 15, y: midY)
-        
-        // Left edge
-        path.move(to: topLeft)
-        path.addQuadCurve(to: bottomLeft, control: ctrlLeft)
-        // Right edge
-        path.move(to: topRight)
-        path.addQuadCurve(to: bottomRight, control: ctrlRight)
-        
-        return path
-    }
-}
-
-private struct CarpetChevrons: Shape {
-    let geom: LaneCarpetView.CarpetGeometry
-    
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let steps = 5
-        
-        let topLeft = CGPoint(x: geom.topCenterX - geom.topHalfWidth, y: geom.topY)
-        let topRight = CGPoint(x: geom.topCenterX + geom.topHalfWidth, y: geom.topY)
-        let bottomLeft = CGPoint(x: geom.bottomCenterX - geom.bottomHalfWidth, y: geom.bottomY)
-        let bottomRight = CGPoint(x: geom.bottomCenterX + geom.bottomHalfWidth, y: geom.bottomY)
-        
-        let midY = (geom.topY + geom.bottomY) / 2
-        let ctrlLeft = CGPoint(x: (topLeft.x + bottomLeft.x) / 2 - 15, y: midY)
-        let ctrlRight = CGPoint(x: (topRight.x + bottomRight.x) / 2 + 15, y: midY)
-        
-        for i in 1..<steps {
-            // Non-linear depth spacing
-            let t = pow(CGFloat(i) / CGFloat(steps), 1.5)
-            let omt = 1.0 - t
-            
-            // Quadratic bezier interpolation
-            let lx = (omt * omt * topLeft.x) + (2 * omt * t * ctrlLeft.x) + (t * t * bottomLeft.x)
-            let ly = (omt * omt * topLeft.y) + (2 * omt * t * ctrlLeft.y) + (t * t * bottomLeft.y)
-            
-            let rx = (omt * omt * topRight.x) + (2 * omt * t * ctrlRight.x) + (t * t * bottomRight.x)
-            let ry = (omt * omt * topRight.y) + (2 * omt * t * ctrlRight.y) + (t * t * bottomRight.y)
-            
-            let cx = (lx + rx) / 2
-            let cy = ly - 6 // Point chevron slightly up toward horizon
-            
-            path.move(to: CGPoint(x: lx, y: ly))
-            path.addLine(to: CGPoint(x: cx, y: cy))
-            path.addLine(to: CGPoint(x: rx, y: ry))
+        var leftPath = Path()
+        if let first = leftPoints.first {
+            leftPath.move(to: first)
+            for p in leftPoints.dropFirst() { leftPath.addLine(to: p) }
         }
         
-        return path
+        var rightPath = Path()
+        if let first = rightPoints.first {
+            rightPath.move(to: first)
+            for p in rightPoints.dropFirst() { rightPath.addLine(to: p) }
+        }
+        
+        var fullPath = leftPath
+        if let lastL = leftPoints.last, let lastR = rightPoints.last, let firstR = rightPoints.first {
+            fullPath.addLine(to: lastR)
+            for p in rightPoints.reversed().dropFirst() {
+                fullPath.addLine(to: p)
+            }
+            if let firstL = leftPoints.first {
+                fullPath.addLine(to: firstL)
+            }
+        }
+        fullPath.closeSubpath()
+        
+        // Depth Chevrons (non-linear spacing)
+        var stepsList = [(CGPoint, CGPoint)]()
+        let numSteps = 5
+        for i in 1..<numSteps {
+            let t = pow(CGFloat(i) / CGFloat(numSteps), 1.5)
+            let idxL = Int(CGFloat(leftPoints.count - 1) * t)
+            let idxR = Int(CGFloat(rightPoints.count - 1) * t)
+            if idxL >= 0 && idxL < leftPoints.count && idxR >= 0 && idxR < rightPoints.count {
+                stepsList.append((leftPoints[idxL], rightPoints[idxR]))
+            }
+        }
+        
+        return (leftPath, rightPath, fullPath, stepsList)
     }
 }
 
@@ -219,6 +185,7 @@ public struct ADASHUDView: View {
     public let activeLeadVehicle: TrackedVehicle?
     public let vpXNormalized: Double
     public let vpYNormalized: Double
+    public let detectedLane: DetectedLane?
     public let viewSize: CGSize
     
     @State private var isPulsing: Bool = false
@@ -231,6 +198,7 @@ public struct ADASHUDView: View {
         activeLeadVehicle: TrackedVehicle?,
         vpXNormalized: Double,
         vpYNormalized: Double,
+        detectedLane: DetectedLane?,
         viewSize: CGSize
     ) {
         self.hostSpeedKmh = hostSpeedKmh
@@ -240,6 +208,7 @@ public struct ADASHUDView: View {
         self.activeLeadVehicle = activeLeadVehicle
         self.vpXNormalized = vpXNormalized
         self.vpYNormalized = vpYNormalized
+        self.detectedLane = detectedLane
         self.viewSize = viewSize
     }
     
@@ -248,6 +217,7 @@ public struct ADASHUDView: View {
             // MARK: Dynamic 3D Road Carpet Overlay
             LaneCarpetView(
                 leadVehicle: activeLeadVehicle,
+                detectedLane: detectedLane,
                 vpXNormalized: vpXNormalized,
                 vpYNormalized: vpYNormalized,
                 viewSize: viewSize,

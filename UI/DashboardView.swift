@@ -22,6 +22,7 @@ public struct DashboardView: View {
                     activeLeadVehicle: viewModel.activeLeadVehicle,
                     vpXNormalized: viewModel.vpXNormalized,
                     vpYNormalized: viewModel.vpYNormalized,
+                    detectedLane: viewModel.detectedLane,
                     viewSize: geometry.size
                 )
             }
@@ -34,10 +35,7 @@ public struct DashboardView: View {
 // MARK: - ADAS ViewModel (MVVM Pipeline Orchestrator)
 
 /// Coordinates the end-to-end ADAS pipeline:
-/// Camera → YOLO26 → Multi-Object Tracker → Lead Selection → HUD
-///
-/// All heavy computation runs on a dedicated `.userInteractive` serial queue.
-/// UI state is published strictly via `@MainActor` dispatch.
+/// Camera → YOLO26 → Real Lane Detection → Multi-Object Tracker → HUD
 public final class ADASViewModel: ObservableObject {
     
     // MARK: - Published UI State
@@ -50,6 +48,7 @@ public final class ADASViewModel: ObservableObject {
     @Published public private(set) var droppedFrameCount: Int = 0
     @Published public private(set) var vpXNormalized: Double = 0.5
     @Published public private(set) var vpYNormalized: Double = 530.0 / 1080.0
+    @Published public private(set) var detectedLane: DetectedLane? = nil
     
     // MARK: - Subsystems
     
@@ -59,6 +58,7 @@ public final class ADASViewModel: ObservableObject {
     
     // Core Vision & Kinematics Engines
     private let detector = YOLO26Detector()
+    private let laneDetector = RealLaneDetector()
     private let tracker = MultiObjectTracker()
     private let calibrator = OnlineCalibrator()
     
@@ -81,7 +81,6 @@ public final class ADASViewModel: ObservableObject {
     private func setupPipeline() {
         try? cameraManager.setupCamera()
         
-        // Zero-copy frame delivery callback
         cameraManager.onFrameAvailable = { [weak self] pixelBuffer, presentationTimestamp in
             guard let self = self else { return }
             self.processingQueue.async {
@@ -97,22 +96,24 @@ public final class ADASViewModel: ObservableObject {
     private func processFrame(pixelBuffer: CVPixelBuffer, presentationTimestamp: CMTime) {
         let timestampSec = CMTimeGetSeconds(presentationTimestamp)
         
-        // Thread-safe sensor snapshots
         let hostSpeed = self.gpsManager.currentSpeedKmh
         let pitchRad = self.motionManager.pitchRadians
         
-        // Step 1: YOLO26 vehicle detection (ANE inference)
+        // Step 1: Real Lane Detection
+        let currentLane = self.laneDetector.detect(pixelBuffer: pixelBuffer, vpYNorm: self.calibrator.vpYNormalized)
+        
+        // Step 2: YOLO26 vehicle detection (ANE inference)
         self.detector.detect(pixelBuffer: pixelBuffer) { [weak self] detectedVehicles in
             guard let self = self else { return }
             
-            // Step 2: Update vanishing point calibration
+            // Step 3: Update vanishing point calibration
             self.calibrator.update(
                 currentPitchRad: pitchRad,
                 distantDetections: detectedVehicles,
                 hostSpeedKmh: hostSpeed
             )
             
-            // Step 3: Multi-Object Tracker update
+            // Step 4: Multi-Object Tracker update
             let tracked = self.tracker.update(
                 detections: detectedVehicles,
                 hostSpeedKmh: hostSpeed,
@@ -121,7 +122,7 @@ public final class ADASViewModel: ObservableObject {
                 calibrator: self.calibrator
             )
             
-            // Step 4: Lead vehicle selection
+            // Step 5: Lead vehicle selection
             let leadVehicle = self.tracker.selectLeadVehicle(hostSpeedKmh: hostSpeed)
             
             let updatedLeadState = leadVehicle?.state
@@ -129,7 +130,7 @@ public final class ADASViewModel: ObservableObject {
             let updatedVpXNorm = self.calibrator.vpXNormalized
             let updatedVpYNorm = self.calibrator.vpYNormalized
             
-            // Step 5: Dispatch clean state to MainActor for SwiftUI rendering
+            // Step 6: Dispatch clean state to MainActor for SwiftUI rendering
             DispatchQueue.main.async {
                 self.trackedVehicles = tracked
                 self.activeLeadVehicle = leadVehicle
@@ -139,9 +140,9 @@ public final class ADASViewModel: ObservableObject {
                 self.droppedFrameCount = self.cameraManager.droppedFrames
                 self.vpXNormalized = updatedVpXNorm
                 self.vpYNormalized = updatedVpYNorm
+                self.detectedLane = currentLane
             }
             
-            // Release frame buffer back to AVFoundation ISP pool
             self.cameraManager.finishProcessing()
         }
     }
